@@ -12,6 +12,7 @@ import { JellySound } from './sound.ts';
 import { createRenderer, resizeView } from '../graphics/renderer.ts';
 import { OpticalTransport } from '../graphics/transport.ts';
 import { createComposite } from '../graphics/composite.ts';
+import { FixedStepper } from './fixed-step.ts';
 
 export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
   stage('Starting WebGPU');
@@ -26,13 +27,14 @@ export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
   stage('Making a little jelly');
   const body=new SoftBody(await loadBabyCage());
   const baby=new Baby(body);scene.add(baby.group);
-  const optics=new RefractiveLightField(body.surface,environment.incoming,ABSORPTION);
+  const optics=new RefractiveLightField(body.cage.opticalSurface,environment.incoming,ABSORPTION);
   const table=await makeTable(optics,environment);scene.add(table.mesh);
   const composite=createComposite(renderer,scene,camera);
   const sound=new JellySound(),rig=new Locomotion(body);
   rig.onContact=(speed,foot)=>sound.contact(speed,foot);
-  let accumulator=0,opticalClock=0,lastTime=0,disposed=false;
-  const reset=()=>{input.recenter();body.reset();accumulator=0;opticalClock=1;};
+  const physicsClock=new FixedStepper(PHYS.step);
+  let lastTime=0,disposed=false;
+  const reset=()=>{input.recenter();body.reset();physicsClock.reset();};
   const input=new Input(camera,renderer.domElement,body,baby.mesh,rig,sound,reset);
   const transport=new OpticalTransport(optics,body,camera,environment.incoming,ABSORPTION,fail);
   const resize=()=>resizeView(renderer,camera,input.controls);
@@ -67,14 +69,10 @@ export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
     if(disposed)return;
     try {
       const dt=Math.min(.05,Math.max(0,(time-lastTime)/1000));lastTime=time;
-      if(document.hidden){accumulator=0;return;}
-      accumulator+=dt;
-      let steps=0;
-      while(accumulator>=PHYS.step&&steps<12) {
+      if(document.hidden){physicsClock.reset();return;}
+      const steps=physicsClock.advance(dt,()=>{
         input.step(PHYS.step);rig.step(PHYS.step);body.step(PHYS.step);rig.afterStep();
-        accumulator-=PHYS.step;steps++;
-      }
-      if(steps===12)accumulator=Math.min(accumulator,PHYS.step);
+      });
       if(steps&&body.surfaceDirty) {
         if(!body.isFinite())throw new Error('The soft-body simulation produced an invalid state');
         body.updateSurface();baby.update();
@@ -82,8 +80,7 @@ export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
       input.update(dt);
       transport.follow();
       table.mesh.position.x=body.center.x;table.mesh.position.z=body.center.z;
-      opticalClock+=dt;
-      if(opticalClock>=1/24){void transport.update().catch(fail);opticalClock=0;}
+      void transport.update().catch(fail);
       composite.render();
     }catch(error){fail(error);}
   };

@@ -193,22 +193,24 @@ const keep = object => object;
       }
       const width=hiX-loX+.002,depth=hiZ-loZ+.002; loX-=.001;loZ-=.001;
       const sampleArea=width*depth/(2*this.samples*this.samples),stride=this.samples+1;
-      const rays=Array.from({length:3},()=>new Array(stride*stride).fill(null));
-      const sigmas=this.sigma,iors=[1.347,1.350,1.354];
+      const rays=new Array(stride*stride).fill(null);
+      const sigmas=this.sigma,ior=1.35;
       for(let y=0;y<=this.samples;y++) for(let x=0;x<=this.samples;x++) {
         // Connected ray bundles transport a continuous footprint, not point noise.
         const o=[loX+x/this.samples*width,top,loZ+y/this.samples*depth];
         const entry=this.bvh.hit(o,D); if(!entry) continue;
         const en=this.bvh.normal(entry,D,true),entryPoint=o.map((v,a)=>v+D[a]*entry.distance);
-        for(let channel=0;channel<3;channel++) {
-          const transmitted=refractRay(D,en,1,iors[channel]); if(!transmitted) continue;
-          let dir=transmitted.direction,throughput=transmitted.transmission;
+        {
+          // Share the geometric path across RGB; retain spectral absorption.
+          // The original subpixel caustic dispersion does not warrant 3× tracing.
+          const transmitted=refractRay(D,en,1,ior); if(!transmitted) continue;
+          let dir=transmitted.direction,throughput=transmitted.transmission,pathLength=0;
           let start=entryPoint.map((v,a)=>v+dir[a]*2e-6),escaped=false,branch=0;
           for(let bounce=0;bounce<4;bounce++) {
             const exit=this.bvh.hit(start,dir); if(!exit) break;
-            throughput*=Math.exp(-sigmas[channel]*exit.distance);
+            pathLength+=exit.distance;
             const hitPoint=start.map((v,a)=>v+dir[a]*exit.distance);
-            const normal=this.bvh.normal(exit,dir,false),refraction=refractRay(dir,normal,iors[channel],1);
+            const normal=this.bvh.normal(exit,dir,false),refraction=refractRay(dir,normal,ior,1);
             if(refraction) {
               throughput*=refraction.transmission; dir=refraction.direction;
               start=hitPoint.map((v,a)=>v+dir[a]*2e-6); escaped=true;branch=bounce; break;
@@ -220,18 +222,18 @@ const keep = object => object;
           const distance=-start[1]/dir[1]; if(distance<=0) continue;
           // Secondary interception is occlusion here, not an invented ray exit.
           if(this.bvh.hit(start,dir,distance)) continue;
-          rays[channel][y*stride+x]={landing:[start[0]+dir[0]*distance,start[2]+dir[2]*distance],throughput,branch,entryY:entryPoint[1],exitY:start[1]};
+          rays[y*stride+x]={landing:[start[0]+dir[0]*distance,start[2]+dir[2]*distance],throughput:sigmas.map(sigma=>throughput*Math.exp(-sigma*pathLength)),branch,entryY:entryPoint[1],exitY:start[1]};
         }
       }
       const continuity=Math.max(width,depth)/this.samples*8;
-      for(let channel=0;channel<3;channel++)for(let y=0;y<this.samples;y++)for(let x=0;x<this.samples;x++) {
+      for(let y=0;y<this.samples;y++)for(let x=0;x<this.samples;x++) {
         const a=y*stride+x,b=a+1,c=a+stride,d=c+1;
         for(const ids of [[a,b,d],[a,d,c]]) {
-          const beam=ids.map(id=>rays[channel][id]);if(beam.some(ray=>ray===null))continue;
+          const beam=ids.map(id=>rays[id]);if(beam.some(ray=>ray===null))continue;
           // Do not bridge silhouettes or discontinuous internal-reflection paths.
           if(beam.some(ray=>ray.branch!==beam[0].branch||Math.abs(ray.entryY-beam[0].entryY)>continuity||Math.abs(ray.exitY-beam[0].exitY)>continuity))continue;
-          const flux=sampleArea*beam.reduce((sum,ray)=>sum+ray.throughput,0)/3;
-          depositBeam(this.photons,this.size,this.origin,this.span,beam.map(ray=>ray.landing),channel,flux);
+          const flux=[0,1,2].map(channel=>sampleArea*(beam[0].throughput[channel]+beam[1].throughput[channel]+beam[2].throughput[channel])/3);
+          depositBeam(this.photons,this.size,this.origin,this.span,beam.map(ray=>ray.landing),0,flux);
         }
       }
       for(let i=0;i<this.size*this.size;i++) {

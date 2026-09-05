@@ -89,7 +89,9 @@ export class Input {
         this.rawTarget.copy(this.temp);
       }
     } else if(e.pointerType==='mouse') {
-      this.canvas.style.cursor=this.raycaster.intersectObject(this.mesh,false).length?'grab':'default';
+      // Hover is only a cursor hint. Avoid testing 144k faces at mouse-event rate;
+      // pointerdown still resolves the exact visible triangle for the real grip.
+      this.canvas.style.cursor=this.mesh.geometry.boundingBox&&this.raycaster.ray.intersectsBox(this.mesh.geometry.boundingBox)?'grab':'default';
     }
   };
   private end=(e?:PointerEvent)=>{

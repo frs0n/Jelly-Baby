@@ -14,6 +14,10 @@ orbit, scroll or pinch to zoom, and drag the baby to stretch and throw. The came
 holds still during a grab and follows smoothly after release. Touch controls
 appear on mobile. R resets. Sound starts with the first interaction.
 
+Physics is a foundation for plausible appearance and behavior, balanced against
+real-time CPU/GPU responsiveness. Preserve the established look and feel; use
+bounded work and perceptually close approximations where full simulation causes lag.
+
 ## Implementation
 
 - `src/physics/soft-body.js` uses the reference's neo-Hookean energy with coupled
@@ -22,6 +26,8 @@ appear on mobile. R resets. Sound starts with the first interaction.
   artificial rest stress; whole-step backtracking prevents inverted elements.
   The 240 Hz fixed step matches `refs/jelly-webgpu.html`. Gravity is deliberately
   reduced to 2.4 m/s², with a smaller jump impulse for a gentle, floating hop.
+  Solver and surface deformation loops reuse storage. Catch-up work yields after
+  8 ms or six substeps, dropping overload backlog while keeping the fixed timestep.
 - The displayed body is the exact marching-tetrahedra mesh from
   `refs/jelly_baby_mesh.html`, uniformly scaled to 7 cm: 72,234 indexed vertices,
   144,464 triangles and no open edges. `npm run build:model` regenerates its binary
@@ -35,14 +41,20 @@ appear on mobile. R resets. Sound starts with the first interaction.
   The muscles release completely during a grab and recover gradually afterward.
   Gait forces stop when movement stops; damping dissipates recoil and the settled
   body sleeps until the next interaction.
-- The reference's RGB surface tracing, Fresnel transmission, internal reflection,
-  absorption, and per-vertex optical thickness run in a worker. There is one
-  outstanding snapshot at a time. Translation compensation keeps the light field
+- Fresnel transmission, internal reflection, spectral absorption and optical
+  thickness run in a worker on a 20,176-triangle optical proxy sampled from the
+  same implicit model. The full visible mesh stays intact. RGB shares one refracted
+  path; thickness is interpolated back to the visible vertices through a precomputed
+  surface mapping. Compact cage snapshots replace full-mesh transfers.
+  There is one outstanding snapshot at a time, with at most 30 requests per second.
+  Caustics publish before thickness finishes, camera-only updates reuse the light
+  field, and idle frames do no optical work. Translation compensation keeps the light field
   attached while the worker traces the changing shape. A 256² RGBA16F receiver
   preserves bright caustic flux; vertical motion reprojects the directional shadow.
   Connected refracted beams replace point splats. Their incident flux is divided
   by the landed footprint and integrated over each receiver pixel, including
   subpixel footprints and overlapping folds, without a caustic blur kernel.
+  Pixel clipping reuses scratch storage and skips empty or fully covered regions.
 - The supplied HDR window is reoriented above the set, boosted, and balanced
   against reduced room fill. Window direction, color, and flux are then measured
   from that same edited HDR, combining adjacent panes into one emitter.
@@ -54,11 +66,12 @@ appear on mobile. R resets. Sound starts with the first interaction.
 - Grab stencils reconstruct the selected surface point exactly. Pointer smoothing
   is short and force remains limited by XPBD. Dragging against the floor intersects
   the pointer ray with the table, preserving screen alignment.
+  Hover uses a bounding-box cursor hint; a real grab still picks the exact mesh.
 - Procedural contact audio combines damped membrane modes and a short filtered
   contact transient. No audio files or remote resources are required.
 
-Optical approximations include screen-space view transmission, a finite ray grid,
-one measured window direction, a planar receiver, and omitted beams at visibility
+Optical approximations include screen-space view transmission, the optical proxy,
+shared RGB ray paths, a finite ray grid, one measured window direction, a planar receiver, and omitted beams at visibility
 discontinuities. The simulation has no self-collision or tearing. The character
 uses powered posture forces to stand and walk.
 
@@ -68,6 +81,7 @@ uses powered posture forces to stand and walk.
 npm run lint
 npm run typecheck
 npm run test:physics
+npm run test:performance
 npm run build
 ```
 
@@ -76,8 +90,14 @@ jumping, stretching, throwing, recovery, HDR source measurement, and refracted
 light reaching the floor. Regressions also check roundness, airborne duration,
 facial render ordering, grab projection before/after deformation, floor targeting,
 and caustic color/flux, subpixel beam conservation, element orientation, zero-force
-rest energy, complete idle sleep, and the generated model's source hash. Modules are linted and tested
-numerically; new application modules are TypeScript.
+rest energy, complete idle sleep, and the generated model's source hash. Performance
+regressions check bounded catch-up, proxy flux/thickness agreement, and the actual
+worker's transferable two-stage response and camera-only reuse.
+
+`npm run benchmark` reports CPU timings for walking and a severe stretch. In the
+local Node benchmark, stretch physics fell from about 28 to 8 ms per four substeps,
+surface deformation from 8 to 3 ms, caustics from 89 to 32 ms, and thickness from
+75 to 9 ms. These are CPU measurements, not browser frame-rate claims.
 
 Per project instructions, no development server or browser inspection was run
 during implementation. GPU shader execution, visual quality, touch feel, and sound

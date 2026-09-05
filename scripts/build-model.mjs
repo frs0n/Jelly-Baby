@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { Buffer } from 'node:buffer';
 import * as THREE from 'three/webgpu';
 import { buildCage } from './model-cage.mjs';
+import { buildOpticalModel } from './optical-model.mjs';
 
 const source=readFileSync('refs/jelly_baby_mesh.html','utf8');
 const begin=source.indexOf('const V =');
@@ -38,6 +39,7 @@ console.log({vertices:positions.length/3,triangles:indices.length/3,scale,volume
 mkdirSync('src/assets/model',{recursive:true});
 const arrays={positions:new Float32Array(positions),normals:new Float32Array(normals),indices:new Uint32Array(indices),
   ...buildCage(positions,scale,bottom,model.jellySDF,signedVolume)};
+Object.assign(arrays,buildOpticalModel(source.slice(begin,end),scale,bottom,arrays));
 const chunks=[],layout={};let offset=0;
 for(const [name,array] of Object.entries(arrays)){
   const padding=(8-offset%8)%8;if(padding){chunks.push(Buffer.alloc(padding));offset+=padding;}

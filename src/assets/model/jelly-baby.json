@@ -53,6 +53,41 @@
       "offset": 7343496,
       "length": 2138,
       "type": "Uint32Array"
+    },
+    "opticalPositions": {
+      "offset": 7352048,
+      "length": 30270,
+      "type": "Float32Array"
+    },
+    "opticalNormals": {
+      "offset": 7473128,
+      "length": 30270,
+      "type": "Float32Array"
+    },
+    "opticalIndices": {
+      "offset": 7594208,
+      "length": 60528,
+      "type": "Uint32Array"
+    },
+    "opticalBindingIds": {
+      "offset": 7836320,
+      "length": 40360,
+      "type": "Uint32Array"
+    },
+    "opticalBindingWeights": {
+      "offset": 7997760,
+      "length": 40360,
+      "type": "Float64Array"
+    },
+    "thicknessIds": {
+      "offset": 8320640,
+      "length": 216702,
+      "type": "Uint32Array"
+    },
+    "thicknessWeights": {
+      "offset": 9187448,
+      "length": 216702,
+      "type": "Float32Array"
     }
   }
 }

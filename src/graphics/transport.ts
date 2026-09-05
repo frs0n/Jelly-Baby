@@ -3,7 +3,7 @@ import type { PerspectiveCamera } from 'three/webgpu';
 import type { SoftBody } from '../physics/soft-body.js';
 import type { RefractiveLightField } from './refractive-light.js';
 
-/** Same reference transport, on a dedicated worker; one in-flight snapshot, no backlog. */
+/** Compact cage snapshots feed an optical proxy; one request in flight, no backlog. */
 export class OpticalTransport {
   private worker:Worker;
   private pending:{resolve:()=>void;reject:(e:Error)=>void}|null=null;
@@ -11,6 +11,7 @@ export class OpticalTransport {
   private tracedOrigin=[0,0];
   private disposed=false;
   private lastRevision=-1;
+  private nextRequestAt=0;
   private lastCamera=new Vector3(Infinity,Infinity,Infinity);
   readonly optics:RefractiveLightField;
   readonly body:SoftBody;
@@ -18,16 +19,21 @@ export class OpticalTransport {
   constructor(optics:RefractiveLightField,body:SoftBody,camera:PerspectiveCamera,direction:Vector3,sigma:number[],fail:(error:Error)=>void) {
     this.optics=optics;this.body=body;this.camera=camera;
     this.worker=new Worker(new URL('./transport.worker.ts',import.meta.url),{type:'module'});
-    this.worker.postMessage({type:'init',vertexCount:body.surface.positions.length/3,
-      indices:body.surface.indices,positions:body.surface.positions,direction:direction.toArray(),sigma});
+    const surface=body.cage.opticalSurface;
+    this.worker.postMessage({type:'init',indices:surface.indices,positions:surface.positions,
+      restNormals:surface.restNormals,bindingIds:surface.bindingIds,bindingWeights:surface.bindingWeights,direction:direction.toArray(),sigma});
     this.worker.onmessage=({data})=>{
       if(this.disposed)return;
       if(data.error){const error=new Error(`Light transport: ${data.error}`);this.pending?.reject(error);this.pending=null;fail(error);return;}
-      optics.lightBytes.set(data.light);optics.shadowBytes.set(data.shadow);
-      optics.lightTexture.needsUpdate=true;optics.shadowTexture.needsUpdate=true;
-      optics.span=data.span;optics.spanNode.value=data.span;
-      this.tracedCenter=data.center;this.tracedOrigin=data.origin;this.follow();
-      body.surface.geometry.attributes.opticalThickness.array.set(data.thickness);
+      if(data.light) {
+        optics.lightBytes.set(data.light);optics.shadowBytes.set(data.shadow);
+        optics.lightTexture.needsUpdate=true;optics.shadowTexture.needsUpdate=true;
+        optics.span=data.span;optics.spanNode.value=data.span;
+        this.tracedCenter=data.center;this.tracedOrigin=data.origin;this.follow();
+        return; // Publish light immediately; thickness arrives separately.
+      }
+      const out=body.surface.geometry.attributes.opticalThickness.array,ids=body.cage.thicknessIds,weights=body.cage.thicknessWeights;
+      for(let i=0,j=0;i<out.length;i++,j+=3)out[i]=data.thickness[ids[j]]*weights[j]+data.thickness[ids[j+1]]*weights[j+1]+data.thickness[ids[j+2]]*weights[j+2];
       body.surface.geometry.attributes.opticalThickness.needsUpdate=true;
       this.pending?.resolve();this.pending=null;
     };
@@ -39,13 +45,15 @@ export class OpticalTransport {
   update():Promise<void> {
     if(this.pending||this.disposed)return Promise.resolve();
     if(this.lastRevision===this.body.surfaceRevision&&this.lastCamera.distanceToSquared(this.camera.position)<1e-10)return Promise.resolve();
+    const now=performance.now();if(now<this.nextRequestAt)return Promise.resolve();
+    this.nextRequestAt=now+1000/30;
     return new Promise((resolve,reject)=>{
       this.pending={resolve,reject};
+      const shapeChanged=this.lastRevision!==this.body.surfaceRevision;
       this.lastRevision=this.body.surfaceRevision;this.lastCamera.copy(this.camera.position);
-      const positions=this.body.surface.positions.slice();
-      const normals=new Float32Array(this.body.surface.geometry.attributes.normal.array);
-      this.worker.postMessage({type:'frame',positions,normals,center:this.body.center.toArray(),camera:this.camera.position.toArray()},
-        [positions.buffer,normals.buffer]);
+      const particles=shapeChanged?this.body.x.slice():null,nodalF=shapeChanged?this.body.nodalF.slice():null;
+      this.worker.postMessage({type:'frame',particles,nodalF,center:this.body.center.toArray(),camera:this.camera.position.toArray()},
+        particles?[particles.buffer,nodalF!.buffer]:[]);
     });
   }
   follow() {

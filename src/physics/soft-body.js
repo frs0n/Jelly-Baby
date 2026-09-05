@@ -1,6 +1,7 @@
 // SI-unit neo-Hookean XPBD, derived from refs/jelly-webgpu.html.
 // Coupled elastic projection removes the reference split's artificial rest stress.
 import { Vector3 } from 'three/webgpu';
+import { deformSurface } from './deform-surface.js';
 import { PHYS, clamp } from './constants.js';
 
 export function determinant(a,b,c,d,e,f,g,h,i) {
@@ -21,7 +22,7 @@ export class SoftBody {
     this.previous=this.x.slice();this.candidate=this.x.slice();this.velocity=new Float64Array(this.x.length);
     this.mass=new Float64Array(this.x.length/3);this.inverseMass=new Float64Array(this.mass.length);
     this.contact=new Float64Array(this.mass.length);this.grab=null;
-    this.elements=[];this.edges=[];this.gradient=new Float64Array(12);this.hydroGradient=new Float64Array(12);this.F=new Float64Array(9);
+    this.elements=[];this.edges=[];this.gradient=new Float64Array(12);this.hydroGradient=new Float64Array(12);this.F=new Float64Array(9);this.cofactors=new Float64Array(9);
     this.nodalF=new Float64Array(this.mass.length*9);this.nodalVolume=new Float64Array(this.mass.length);
     this.center=new Vector3();this.surface=cage.surface;
     this.sleeping=false;this.canSleep=true;this.quietTime=0;this.grounded=false;
@@ -35,7 +36,7 @@ export class SoftBody {
         gradients[3+k]=inv[k];gradients[6+k]=inv[3+k];gradients[9+k]=inv[6+k];
         gradients[k]=-inv[k]-inv[3+k]-inv[6+k];
       }
-      this.elements.push({ids,offsets,volume,gradients,lambdaD:0,lambdaH:0,lambdaB:0});
+      this.elements.push({ids,offsets,volume,gradients,inverseRestDet:1/determinant(...dm),lambdaD:0,lambdaH:0,lambdaB:0});
       for(const id of ids){this.mass[id]+=PHYS.density*volume/4;this.nodalVolume[id]+=volume;}
       for(let i=0;i<4;i++)for(let j=i+1;j<4;j++) {
         const a=Math.min(ids[i],ids[j]),b=Math.max(ids[i],ids[j]),key=`${a},${b}`;
@@ -49,20 +50,20 @@ export class SoftBody {
     this.updateSurface();
   }
   deformation(e) {
-    const x=this.x,g=e.gradients,f=this.F,a=e.offsets[0];f.fill(0);
-    for(let v=1;v<4;v++) {
-      const i=e.offsets[v],j=v*3,dx=x[i]-x[a],dy=x[i+1]-x[a+1],dz=x[i+2]-x[a+2];
-      f[0]+=dx*g[j];f[1]+=dx*g[j+1];f[2]+=dx*g[j+2];
-      f[3]+=dy*g[j];f[4]+=dy*g[j+1];f[5]+=dy*g[j+2];
-      f[6]+=dz*g[j];f[7]+=dz*g[j+1];f[8]+=dz*g[j+2];
-    }
+    const x=this.x,g=e.gradients,f=this.F,a=e.offsets[0],b=e.offsets[1],c=e.offsets[2],d=e.offsets[3];
+    const bx=x[b]-x[a],by=x[b+1]-x[a+1],bz=x[b+2]-x[a+2];
+    const cx=x[c]-x[a],cy=x[c+1]-x[a+1],cz=x[c+2]-x[a+2];
+    const dx=x[d]-x[a],dy=x[d+1]-x[a+1],dz=x[d+2]-x[a+2];
+    f[0]=bx*g[3]+cx*g[6]+dx*g[9];f[1]=bx*g[4]+cx*g[7]+dx*g[10];f[2]=bx*g[5]+cx*g[8]+dx*g[11];
+    f[3]=by*g[3]+cy*g[6]+dy*g[9];f[4]=by*g[4]+cy*g[7]+dy*g[10];f[5]=by*g[5]+cy*g[8]+dy*g[11];
+    f[6]=bz*g[3]+cz*g[6]+dz*g[9];f[7]=bz*g[4]+cz*g[7]+dz*g[10];f[8]=bz*g[5]+cz*g[8]+dz*g[11];
     return f;
   }
   solveElastic(e,h) {
     const f=this.deformation(e),g=e.gradients,dg=this.gradient,hg=this.hydroGradient;
-    let norm=0;for(const value of f)norm+=value*value;norm=Math.sqrt(norm);
+    let norm=0;for(let k=0;k<9;k++)norm+=f[k]*f[k];norm=Math.sqrt(norm);
     if(norm<1e-12)return;
-    const [a,b,c,d,ee,ff,gg,hh,ii]=f;
+    const a=f[0],b=f[1],c=f[2],d=f[3],ee=f[4],ff=f[5],gg=f[6],hh=f[7],ii=f[8];
     const c0=ee*ii-ff*hh,c1=ff*gg-d*ii,c2=d*hh-ee*gg;
     const c3=c*hh-b*ii,c4=a*ii-c*gg,c5=b*gg-a*hh;
     const c6=b*ff-c*ee,c7=c*d-a*ff,c8=a*ee-b*d,J=a*c0+b*c1+c*c2;
@@ -87,10 +88,14 @@ export class SoftBody {
     }
   }
   solveBarrier(e) {
-    const f=this.deformation(e),[a,b,c,d,ee,ff,gg,hh,ii]=f,g=e.gradients,out=this.gradient;
-    const co=[ee*ii-ff*hh,ff*gg-d*ii,d*hh-ee*gg,c*hh-b*ii,a*ii-c*gg,b*gg-a*hh,b*ff-c*ee,c*d-a*ff,a*ee-b*d];
-    const J=a*co[0]+b*co[1]+c*co[2];
+    const f=this.deformation(e),g=e.gradients,out=this.gradient;
+    const a=f[0],b=f[1],c=f[2],d=f[3],ee=f[4],ff=f[5],gg=f[6],hh=f[7],ii=f[8];
+    const J=a*(ee*ii-ff*hh)+b*(ff*gg-d*ii)+c*(d*hh-ee*gg);
     if(J>=.25&&e.lambdaB===0)return;
+    const co=this.cofactors;
+    co[0]=ee*ii-ff*hh;co[1]=ff*gg-d*ii;co[2]=d*hh-ee*gg;
+    co[3]=c*hh-b*ii;co[4]=a*ii-c*gg;co[5]=b*gg-a*hh;
+    co[6]=b*ff-c*ee;co[7]=c*d-a*ff;co[8]=a*ee-b*d;
     let denominator=0;
     for(let v=0;v<4;v++) {
       const j=v*3,w=this.inverseMass[e.ids[v]];
@@ -123,20 +128,26 @@ export class SoftBody {
       for(const [id,w] of c.weights){this.x[id*3+1]+=this.inverseMass[id]*w*depth/c.denominator;this.contact[id]+=depth*w;}
     }
   }
-  minimumJacobian() {
-    let minimum=Infinity;for(const e of this.elements)minimum=Math.min(minimum,determinant(...this.deformation(e)));return minimum;
+  minimumJacobian(stopAt=-Infinity) {
+    let minimum=Infinity;const x=this.x;
+    for(const e of this.elements){
+      const a=e.offsets[0],b=e.offsets[1],c=e.offsets[2],d=e.offsets[3];
+      const J=determinant(x[b]-x[a],x[c]-x[a],x[d]-x[a],x[b+1]-x[a+1],x[c+1]-x[a+1],x[d+1]-x[a+1],x[b+2]-x[a+2],x[c+2]-x[a+2],x[d+2]-x[a+2])*e.inverseRestDet;
+      minimum=Math.min(minimum,J);if(minimum<stopAt)return minimum;
+    }
+    return minimum;
   }
   preserveOrientation() {
-    this.lastMinJacobian=this.minimumJacobian();
+    this.lastMinJacobian=this.minimumJacobian(.12);
     if(this.lastMinJacobian>=.12)return;
     this.candidate.set(this.x);this.limitedSteps++;
     // A constraint can disturb a neighbouring element. Backtrack the complete
     // substep, including grab/contact, until every element remains orientation-preserving.
     for(let fraction=.5;fraction>=1/512;fraction*=.5) {
       for(let i=0;i<this.x.length;i++)this.x[i]=this.previous[i]+fraction*(this.candidate[i]-this.previous[i]);
-      this.lastMinJacobian=this.minimumJacobian();if(this.lastMinJacobian>=.12)return;
+      this.lastMinJacobian=this.minimumJacobian(.12);if(this.lastMinJacobian>=.12)return;
     }
-    this.x.set(this.previous);this.lastMinJacobian=this.minimumJacobian();
+    this.x.set(this.previous);this.lastMinJacobian=this.minimumJacobian(.12);
   }
   step(h) {
     if(this.grab)this.wake();if(this.sleeping)return false;
@@ -192,30 +203,12 @@ export class SoftBody {
     for(let i=0;i<this.mass.length;i++){const w=this.mass[i]/this.totalMass;this.center.x+=this.x[i*3]*w;this.center.y+=this.x[i*3+1]*w;this.center.z+=this.x[i*3+2]*w;}
   }
   updateSurface() {
-    const {positions,stencils,geometry,restNormals}=this.surface,normals=geometry.attributes.normal.array;
     this.nodalF.fill(0);
     for(const e of this.elements) {
       const f=this.deformation(e);
       for(const id of e.ids){const w=e.volume/this.nodalVolume[id];for(let k=0;k<9;k++)this.nodalF[id*9+k]+=f[k]*w;}
     }
-    const f=new Float64Array(9);
-    for(let i=0;i<stencils.length;i++) {
-      let x=0,y=0,z=0;f.fill(0);
-      for(const [id,w] of stencils[i]) {
-        x+=this.x[id*3]*w;y+=this.x[id*3+1]*w;z+=this.x[id*3+2]*w;
-        for(let k=0;k<9;k++)f[k]+=this.nodalF[id*9+k]*w;
-      }
-      positions[i*3]=x;positions[i*3+1]=y;positions[i*3+2]=z;
-      const [a,b,c,d,e,ff,g,h,j]=f,nx=restNormals[i*3],ny=restNormals[i*3+1],nz=restNormals[i*3+2];
-      // Smooth recovered deformation gradient, inverse-transposed onto the exact
-      // reference's SDF normals; no resculpting or Loop smoothing of its surface.
-      const ox=(e*j-ff*h)*nx+(ff*g-d*j)*ny+(d*h-e*g)*nz;
-      const oy=(c*h-b*j)*nx+(a*j-c*g)*ny+(b*g-a*h)*nz;
-      const oz=(b*ff-c*e)*nx+(c*d-a*ff)*ny+(a*e-b*d)*nz;
-      const len=Math.hypot(ox,oy,oz)||1;normals[i*3]=ox/len;normals[i*3+1]=oy/len;normals[i*3+2]=oz/len;
-    }
-    geometry.attributes.position.needsUpdate=true;geometry.attributes.normal.needsUpdate=true;
-    geometry.computeBoundingSphere();geometry.computeBoundingBox();this.updateCenter();
+    deformSurface(this.surface,this.x,this.nodalF);this.updateCenter();
     this.surfaceDirty=false;this.surfaceRevision++;
   }
   energy() {
@@ -223,14 +216,18 @@ export class SoftBody {
   }
   elasticEnergy() {
     let energy=0;
-    for(const e of this.elements){const f=this.deformation(e);let norm=0;for(const x of f)norm+=x*x;const j=determinant(...f);energy+=e.volume*(.5*PHYS.shear*(norm-3)+.5*PHYS.bulk*(j-1-PHYS.shear/PHYS.bulk)**2-.5*PHYS.shear**2/PHYS.bulk);}
+    for(const e of this.elements){const f=this.deformation(e);let norm=0;for(const x of f)norm+=x*x;const j=matrixDet(f);energy+=e.volume*(.5*PHYS.shear*(norm-3)+.5*PHYS.bulk*(j-1-PHYS.shear/PHYS.bulk)**2-.5*PHYS.shear**2/PHYS.bulk);}
     return Math.max(0,energy);
   }
   volumeRatio() {
-    let volume=0;for(const e of this.elements)volume+=determinant(...this.deformation(e))*e.volume;return volume/this.cage.totalVolume;
+    let volume=0;for(const e of this.elements)volume+=matrixDet(this.deformation(e))*e.volume;return volume/this.cage.totalVolume;
   }
   wake(){this.sleeping=false;this.quietTime=0;}
   reset(){this.x.set(this.rest);this.previous.set(this.rest);this.velocity.fill(0);this.grab=null;this.grounded=false;this.wake();this.updateSurface();}
   nudge(){this.wake();for(let i=0;i<this.mass.length;i++){const j=i*3;this.velocity[j]+=.095+(this.x[j+1]-this.center.y)*3;this.velocity[j+1]+=.12;this.velocity[j+2]+=.025;}}
   isFinite(){for(let i=0;i<this.x.length;i++)if(!Number.isFinite(this.x[i])||!Number.isFinite(this.velocity[i])||Math.abs(this.x[i])>100000)return false;return true;}
+}
+
+function matrixDet(f) {
+  return f[0]*(f[4]*f[8]-f[5]*f[7])-f[1]*(f[3]*f[8]-f[5]*f[6])+f[2]*(f[3]*f[7]-f[4]*f[6]);
 }

@@ -23,10 +23,18 @@ export function parseBabyCage(buffer:ArrayBuffer,manifest:ModelManifest) {
   geometry.setIndex(new BufferAttribute(indices,1));geometry.computeBoundingBox();geometry.computeBoundingSphere();
   const tetArray=u32('tets'),tets:number[][]=[];
   for(let i=0;i<tetArray.length;i+=4)tets.push(Array.from(tetArray.subarray(i,i+4)));
+  const opticalGeometry=new BufferGeometry(),opticalPositions=f32('opticalPositions').slice(),opticalNormals=f32('opticalNormals');
+  opticalGeometry.setAttribute('position',new BufferAttribute(opticalPositions,3));
+  opticalGeometry.setAttribute('normal',new BufferAttribute(opticalNormals.slice(),3));
+  opticalGeometry.setAttribute('opticalThickness',new BufferAttribute(new Float32Array(opticalPositions.length/3).fill(.04),1));
+  opticalGeometry.setIndex(new BufferAttribute(u32('opticalIndices'),1));opticalGeometry.computeBoundingBox();
   return {
     pos:f64('particles'),tets,volumes:f64('volumes'),totalVolume:manifest.volume,
     contactBindings:Array.from(u32('contacts'),id=>stencils[id]),
     surface:{geometry,positions,indices,stencils,bindingIds,bindingWeights,restNormals:normals,tetIds:u32('tetIds')},
+    opticalSurface:{geometry:opticalGeometry,positions:opticalPositions,indices:u32('opticalIndices'),restNormals:opticalNormals,
+      bindingIds:u32('opticalBindingIds'),bindingWeights:f64('opticalBindingWeights')},
+    thicknessIds:u32('thicknessIds'),thicknessWeights:f32('thicknessWeights'),
   };
 }
 
