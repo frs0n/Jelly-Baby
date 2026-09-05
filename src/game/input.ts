@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { SoftBody } from '../physics/soft-body.js';
 import type { Locomotion } from './locomotion.ts';
 import type { JellySound } from './sound.ts';
+import { surfaceGrab, projectGrabTarget, advanceGrabTarget } from '../physics/grab.ts';
 
 export class Input {
   readonly controls:OrbitControls;
@@ -72,16 +73,8 @@ export class Input {
     if(!hit?.face)return;
     void this.sound.unlock().catch(()=>{});
     e.preventDefault();e.stopImmediatePropagation();
-    const {a,b,c}=hit.face,p=this.body.surface.positions;
-    const tri=new THREE.Triangle(new THREE.Vector3().fromArray(p,a*3),new THREE.Vector3().fromArray(p,b*3),new THREE.Vector3().fromArray(p,c*3));
-    const bary=tri.getBarycoord(hit.point,new THREE.Vector3());if(!bary)return;
-    const weights=new Map<number,number>();
-    for(const [surfaceId,w] of [[a,bary.x],[b,bary.y],[c,bary.z]])
-      for(const [id,value] of this.body.surface.stencils[surfaceId]) weights.set(id,(weights.get(id)||0)+w*value);
-    const list=[...weights].filter(([,w])=>w>1e-8),sum=list.reduce((a,[,w])=>a+w,0);
-    if(sum<=0)return;
-    list.forEach(pair=>pair[1]/=sum);
-    this.body.grab={weights:list,target:hit.point.clone(),point:hit.point.clone(),lambda:new Float64Array(3)};
+    const grab=surfaceGrab(this.body,hit.face,hit.point);if(!grab)return;
+    this.body.grab=grab;
     this.activePointer=e.pointerId;this.controls.enabled=false;
     this.canvas.setPointerCapture(e.pointerId);this.canvas.classList.add('grabbing');
     this.camera.getWorldDirection(this.temp);this.plane.setFromNormalAndCoplanarPoint(this.temp,hit.point);
@@ -92,9 +85,7 @@ export class Input {
     this.eventRay(e);
     if(this.body.grab) {
       e.preventDefault();e.stopImmediatePropagation();
-      if(this.raycaster.ray.intersectPlane(this.plane,this.temp)) {
-        this.temp.y=Math.max(.001,this.temp.y);
-        // World-relative reach: throwing works anywhere on the infinite table.
+      if(projectGrabTarget(this.raycaster.ray,this.plane,this.temp)) {
         this.rawTarget.copy(this.temp);
       }
     } else if(e.pointerType==='mouse') {
@@ -131,8 +122,7 @@ export class Input {
     if(this.rig.move.lengthSq()>1)this.rig.move.normalize();
     const grab=this.body.grab;
     if(grab) {
-      const delta=this.temp.copy(this.rawTarget).sub(grab.target),distance=delta.length();
-      if(distance>0)grab.target.addScaledVector(delta,Math.min(1-Math.exp(-32*h),.65*h/distance));
+      advanceGrabTarget(grab.target,this.rawTarget,h);
     }
   }
   update(dt:number) {

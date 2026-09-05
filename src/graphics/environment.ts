@@ -1,11 +1,16 @@
 import * as THREE from 'three/webgpu';
 import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
+import { shapeStudioLight } from './studio-light.ts';
 
 export async function loadEnvironment(renderer:THREE.WebGPURenderer,scene:THREE.Scene) {
   const source=await new EXRLoader().setDataType(THREE.HalfFloatType).loadAsync(new URL('../assets/bg_room.exr',import.meta.url).href);
   source.mapping=THREE.EquirectangularReflectionMapping;
   source.colorSpace=THREE.LinearSRGBColorSpace;
-  const lighting=measureWindow(source.image as {data:Uint16Array;width:number;height:number});
+  const original=source.image as {data:Uint16Array;width:number;height:number};
+  const sourceWindow=measureWindow(original).incoming.negate();
+  const studio=shapeStudioLight(original,sourceWindow);
+  source.image.data=studio.data;source.needsUpdate=true;
+  const lighting=measureWindow(studio);
   const pmrem=new THREE.PMREMGenerator(renderer);
   const target=await pmrem.fromEquirectangularAsync(source);
   scene.environment=target.texture;scene.environmentIntensity=.9;
@@ -55,6 +60,13 @@ export function measureWindow(image:{data:Uint16Array;width:number;height:number
     if(flux>bestFlux){bestFlux=flux;selected=label;}
     label++;
   }
+  const emitterAxis=new THREE.Vector3();
+  for(let sy=0;sy<sampleHeight;sy++)for(let sx=0;sx<sampleWidth;sx++) {
+    const id=sy*sampleWidth+sx;if(labels[id]!==selected)continue;
+    const phi=((sy*2+.5)/height-.5)*Math.PI,theta=((sx*2+.5)/width-.5)*Math.PI*2;
+    emitterAxis.addScaledVector(new THREE.Vector3(Math.cos(phi)*Math.cos(theta),Math.sin(phi),Math.cos(phi)*Math.sin(theta)),luminances[id]*Math.cos(phi));
+  }
+  emitterAxis.normalize();
   const direction=new THREE.Vector3(),rgb=new THREE.Vector3();
   let weightSum=0,windowIrradiance=0,ambient=0;
   for(let y=0;y<height;y+=2) for(let x=0;x<width;x+=2) {
@@ -64,10 +76,13 @@ export function measureWindow(image:{data:Uint16Array;width:number;height:number
     const v=(y+.5)/height,phi=(v-.5)*Math.PI,theta=((x+.5)/width-.5)*2*Math.PI;
     const solidAngle=Math.cos(phi)*8*Math.PI*Math.PI/(width*height);
     ambient+=l*Math.max(0,Math.sin(phi))*solidAngle;
-    if(labels[(y/2)*sampleWidth+x/2]!==selected || phi<.03) continue;
+    const ray=new THREE.Vector3(Math.cos(phi)*Math.cos(theta),Math.sin(phi),Math.cos(phi)*Math.sin(theta));
+    // Mullions split one window into disconnected bright panes. Reunite nearby
+    // panes around the dominant emitter, without merging opposite room windows.
+    if(labels[(y/2)*sampleWidth+x/2]<0 || ray.dot(emitterAxis)<Math.cos(.65) || phi<.03)continue;
     const projectedSolidAngle=solidAngle*Math.sin(phi);
     const weight=l*projectedSolidAngle;
-    direction.addScaledVector(new THREE.Vector3(Math.cos(phi)*Math.cos(theta),Math.sin(phi),Math.cos(phi)*Math.sin(theta)),weight);
+    direction.addScaledVector(ray,weight);
     rgb.addScaledVector(new THREE.Vector3(r,g,b),projectedSolidAngle);
     weightSum+=weight;windowIrradiance+=weight;
   }

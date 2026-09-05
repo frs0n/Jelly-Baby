@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Jelly Creature Mesh — Three.js WebGPU</title>
+  <style>
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #ececec; }
+    canvas { display: block; }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.185.0/build/three.module.js",
+      "three/webgpu": "https://cdn.jsdelivr.net/npm/three@0.185.0/build/three.webgpu.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.185.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+<script type="module">
+import * as THREE from 'three/webgpu';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// -----------------------------------------------------------------------------
+// Implicit jelly model
+// -----------------------------------------------------------------------------
+// The creature is modeled as one smooth implicit solid, then polygonized once.
+// That gives the body + arms genuinely soft, fused transitions instead of
+// visibly intersecting sphere/capsule pieces.
+
+const V = (x, y, z) => new THREE.Vector3(x, y, z);
+
+function sdEllipsoid(p, c, r) {
+  const qx = (p.x - c.x) / r.x;
+  const qy = (p.y - c.y) / r.y;
+  const qz = (p.z - c.z) / r.z;
+  const qLen = Math.hypot(qx, qy, qz);
+  return (qLen - 1.0) * Math.min(r.x, r.y, r.z);
+}
+
+function sdCapsule(p, a, b, radius) {
+  const pax = p.x - a.x, pay = p.y - a.y, paz = p.z - a.z;
+  const bax = b.x - a.x, bay = b.y - a.y, baz = b.z - a.z;
+  const h = THREE.MathUtils.clamp(
+    (pax * bax + pay * bay + paz * baz) / (bax * bax + bay * bay + baz * baz),
+    0.0, 1.0
+  );
+  const dx = pax - bax * h;
+  const dy = pay - bay * h;
+  const dz = paz - baz * h;
+  return Math.hypot(dx, dy, dz) - radius;
+}
+
+function smoothUnion(a, b, k) {
+  const h = THREE.MathUtils.clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+  return THREE.MathUtils.lerp(b, a, h) - k * h * (1.0 - h);
+}
+
+function smoothIntersection(a, b, k) {
+  return -smoothUnion(-a, -b, k);
+}
+
+const C = {
+  body:      V( 0.00,  0.10, 0.00),
+  belly:     V( 0.00, -0.42, 0.05),
+  crown:     V( 0.00,  0.68, 0.00),
+  leftFoot:  V(-0.73, -0.84, 0.02),
+  midFoot:   V( 0.00, -0.86, 0.02),
+  rightFoot: V( 0.73, -0.84, 0.02),
+  leftArm:   V(-1.30, -0.04, 0.00),
+  rightArm:  V( 1.30, -0.04, 0.00),
+};
+
+function blobEllipsoid(p, c, r, strength = 1.0, sharpness = 1.7) {
+  const dx = (p.x - c.x) / r.x;
+  const dy = (p.y - c.y) / r.y;
+  const dz = (p.z - c.z) / r.z;
+  return strength * Math.exp(-sharpness * (dx * dx + dy * dy + dz * dz));
+}
+
+function jellySDF(p) {
+  // A Gaussian metaball field is smooth to every derivative. Unlike a chain of
+  // smooth-min unions, there is no shoulder/kink where one primitive hands off
+  // to another. The upper body therefore reads as one thick-liquid glob from
+  // the front, side and back.
+  let f = 0.0;
+
+  // Main rounded glob. X and Z are deliberately close in scale so the creature
+  // is genuinely round in depth instead of looking like a flattened extrusion.
+  f += blobEllipsoid(p, C.body,  V(1.12, 1.17, 1.00), 1.25, 1.60);
+
+  // Puffy lower mass and rounded crown subtly bias the silhouette without
+  // introducing any curvature discontinuity.
+  f += blobEllipsoid(p, C.belly, V(1.28, 0.74, 1.04), 0.72, 1.70);
+  f += blobEllipsoid(p, C.crown, V(0.98, 0.62, 0.94), 0.45, 1.70);
+
+  // Soft jelly skirt / feet.
+  f += blobEllipsoid(p, C.leftFoot,  V(0.57, 0.36, 0.78), 0.42, 1.90);
+  f += blobEllipsoid(p, C.midFoot,   V(0.58, 0.30, 0.80), 0.38, 1.90);
+  f += blobEllipsoid(p, C.rightFoot, V(0.57, 0.36, 0.78), 0.42, 1.90);
+
+  // Arms are also metaballs, so their roots melt continuously into the body.
+  f += blobEllipsoid(p, C.leftArm,  V(0.40, 0.34, 0.38), 0.75, 1.75);
+  f += blobEllipsoid(p, V(-1.06, -0.14, 0.00), V(0.34, 0.44, 0.42), 0.40, 1.75);
+  f += blobEllipsoid(p, C.rightArm, V(0.40, 0.34, 0.38), 0.75, 1.75);
+  f += blobEllipsoid(p, V( 1.06, -0.14, 0.00), V(0.34, 0.44, 0.42), 0.40, 1.75);
+
+  // The iso-value defines the actual liquid surface. Return negative inside to
+  // preserve the polygonizer's existing sign convention.
+  let d = 0.42 - f;
+
+  // Only the very bottom is gently flattened for floor contact. This does not
+  // affect the front/back curvature above the skirt.
+  const bottomPlane = -1.04 - p.y;
+  d = smoothIntersection(d, bottomPlane, 0.045);
+
+  return d;
+}
+
+// -----------------------------------------------------------------------------
+// Marching tetrahedra polygonizer
+// -----------------------------------------------------------------------------
+// No addon dependency: the generated result is a normal THREE.BufferGeometry,
+// so the actual creature can be reused directly in any WebGPU scene.
+
+function buildJellyGeometry() {
+  const NX = 104, NY = 96, NZ = 88;
+  const min = V(-2.05, -1.14, -1.34);
+  const max = V( 2.05,  1.52,  1.34);
+
+  const sx = (max.x - min.x) / (NX - 1);
+  const sy = (max.y - min.y) / (NY - 1);
+  const sz = (max.z - min.z) / (NZ - 1);
+
+  const field = new Float32Array(NX * NY * NZ);
+  const idx = (x, y, z) => x + NX * (y + NY * z);
+  const p = new THREE.Vector3();
+
+  for (let z = 0; z < NZ; z++) {
+    p.z = min.z + z * sz;
+    for (let y = 0; y < NY; y++) {
+      p.y = min.y + y * sy;
+      for (let x = 0; x < NX; x++) {
+        p.x = min.x + x * sx;
+        field[idx(x, y, z)] = jellySDF(p);
+      }
+    }
+  }
+
+  const cubeCorners = [
+    [0,0,0], [1,0,0], [1,1,0], [0,1,0],
+    [0,0,1], [1,0,1], [1,1,1], [0,1,1]
+  ];
+
+  const tetrahedra = [
+    [0,5,1,6], [0,1,2,6], [0,2,3,6],
+    [0,3,7,6], [0,7,4,6], [0,4,5,6]
+  ];
+
+  const positions = [];
+  const normals = [];
+
+  const cp = Array.from({ length: 8 }, () => new THREE.Vector3());
+  const cv = new Float32Array(8);
+
+  const gradEps = Math.min(sx, sy, sz) * 0.40;
+  const gxP = new THREE.Vector3(), gxN = new THREE.Vector3();
+  const gyP = new THREE.Vector3(), gyN = new THREE.Vector3();
+  const gzP = new THREE.Vector3(), gzN = new THREE.Vector3();
+
+  function gradientAt(q, target) {
+    gxP.set(q.x + gradEps, q.y, q.z); gxN.set(q.x - gradEps, q.y, q.z);
+    gyP.set(q.x, q.y + gradEps, q.z); gyN.set(q.x, q.y - gradEps, q.z);
+    gzP.set(q.x, q.y, q.z + gradEps); gzN.set(q.x, q.y, q.z - gradEps);
+    target.set(
+      jellySDF(gxP) - jellySDF(gxN),
+      jellySDF(gyP) - jellySDF(gyN),
+      jellySDF(gzP) - jellySDF(gzN)
+    ).normalize();
+    return target;
+  }
+
+  function interpolate(a, b, va, vb, out) {
+    const denom = va - vb;
+    const t = Math.abs(denom) < 1e-8 ? 0.5 : va / denom;
+    out.set(
+      a.x + (b.x - a.x) * t,
+      a.y + (b.y - a.y) * t,
+      a.z + (b.z - a.z) * t
+    );
+    return out;
+  }
+
+  const e0 = new THREE.Vector3(), e1 = new THREE.Vector3();
+  const e2 = new THREE.Vector3(), e3 = new THREE.Vector3();
+  const n0 = new THREE.Vector3(), n1 = new THREE.Vector3(), n2 = new THREE.Vector3();
+  const fn = new THREE.Vector3(), ab = new THREE.Vector3(), ac = new THREE.Vector3();
+  const avgN = new THREE.Vector3();
+
+  function emitTriangle(a, b, c) {
+    gradientAt(a, n0); gradientAt(b, n1); gradientAt(c, n2);
+
+    // Ensure triangle winding faces the same direction as the SDF gradient.
+    ab.subVectors(b, a);
+    ac.subVectors(c, a);
+    fn.crossVectors(ab, ac);
+    avgN.copy(n0).add(n1).add(n2);
+
+    if (fn.dot(avgN) < 0) {
+      positions.push(a.x,a.y,a.z, c.x,c.y,c.z, b.x,b.y,b.z);
+      normals.push(n0.x,n0.y,n0.z, n2.x,n2.y,n2.z, n1.x,n1.y,n1.z);
+    } else {
+      positions.push(a.x,a.y,a.z, b.x,b.y,b.z, c.x,c.y,c.z);
+      normals.push(n0.x,n0.y,n0.z, n1.x,n1.y,n1.z, n2.x,n2.y,n2.z);
+    }
+  }
+
+  function polygonizeTetra(ids) {
+    const inside = [];
+    const outside = [];
+    for (let i = 0; i < 4; i++) {
+      const id = ids[i];
+      (cv[id] < 0 ? inside : outside).push(id);
+    }
+
+    if (inside.length === 0 || inside.length === 4) return;
+
+    if (inside.length === 1) {
+      const i0 = inside[0];
+      interpolate(cp[i0], cp[outside[0]], cv[i0], cv[outside[0]], e0);
+      interpolate(cp[i0], cp[outside[1]], cv[i0], cv[outside[1]], e1);
+      interpolate(cp[i0], cp[outside[2]], cv[i0], cv[outside[2]], e2);
+      emitTriangle(e0, e1, e2);
+      return;
+    }
+
+    if (inside.length === 3) {
+      const o0 = outside[0];
+      interpolate(cp[o0], cp[inside[0]], cv[o0], cv[inside[0]], e0);
+      interpolate(cp[o0], cp[inside[1]], cv[o0], cv[inside[1]], e1);
+      interpolate(cp[o0], cp[inside[2]], cv[o0], cv[inside[2]], e2);
+      emitTriangle(e0, e2, e1);
+      return;
+    }
+
+    // 2-in / 2-out => quad split into two triangles.
+    const i0 = inside[0], i1 = inside[1];
+    const o0 = outside[0], o1 = outside[1];
+
+    interpolate(cp[i0], cp[o0], cv[i0], cv[o0], e0);
+    interpolate(cp[i0], cp[o1], cv[i0], cv[o1], e1);
+    interpolate(cp[i1], cp[o0], cv[i1], cv[o0], e2);
+    interpolate(cp[i1], cp[o1], cv[i1], cv[o1], e3);
+
+    emitTriangle(e0, e1, e2);
+    emitTriangle(e1, e3, e2);
+  }
+
+  for (let z = 0; z < NZ - 1; z++) {
+    for (let y = 0; y < NY - 1; y++) {
+      for (let x = 0; x < NX - 1; x++) {
+        for (let c = 0; c < 8; c++) {
+          const [ox, oy, oz] = cubeCorners[c];
+          const gx = x + ox, gy = y + oy, gz = z + oz;
+          cp[c].set(min.x + gx * sx, min.y + gy * sy, min.z + gz * sz);
+          cv[c] = field[idx(gx, gy, gz)];
+        }
+        for (const tet of tetrahedra) polygonizeTetra(tet);
+      }
+    }
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  geometry.computeBoundingSphere();
+  geometry.computeBoundingBox();
+  return geometry;
+}
+
+// -----------------------------------------------------------------------------
+// Minimal WebGPU viewer
+// -----------------------------------------------------------------------------
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xeeeeee);
+
+const camera = new THREE.PerspectiveCamera(34, innerWidth / innerHeight, 0.01, 100);
+camera.position.set(0.0, 0.14, 6.2);
+
+const renderer = new THREE.WebGPURenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = false;
+document.body.appendChild(renderer.domElement);
+await renderer.init();
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 0.12, 0);
+controls.enableDamping = true;
+controls.minDistance = 3.3;
+controls.maxDistance = 9.0;
+
+// Placeholder only so the raw form is easy to inspect. Replace/remove it in
+// your project; the geometry itself has no dependency on this material.
+const previewMaterial = new THREE.MeshStandardMaterial({
+  color: 0xd8d8d8,
+  roughness: 0.72,
+  metalness: 0.0
+});
+
+const jellyGeometry = buildJellyGeometry();
+const jelly = new THREE.Mesh(jellyGeometry, previewMaterial);
+scene.add(jelly);
+
+const hemi = new THREE.HemisphereLight(0xffffff, 0x777777, 2.1);
+scene.add(hemi);
+
+const key = new THREE.DirectionalLight(0xffffff, 3.2);
+key.position.set(4, 6, 5);
+scene.add(key);
+
+const rim = new THREE.DirectionalLight(0xffffff, 1.4);
+rim.position.set(-4, 2, -4);
+scene.add(rim);
+
+// Tiny keyboard helper for topology inspection: W toggles wireframe.
+addEventListener('keydown', (e) => {
+  if (e.code === 'KeyW') previewMaterial.wireframe = !previewMaterial.wireframe;
+});
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+renderer.setAnimationLoop(() => {
+  controls.update();
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>

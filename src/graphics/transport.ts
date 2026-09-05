@@ -1,4 +1,5 @@
-import type { PerspectiveCamera, Vector3 } from 'three/webgpu';
+import { Vector3 } from 'three/webgpu';
+import type { PerspectiveCamera } from 'three/webgpu';
 import type { SoftBody } from '../physics/soft-body.js';
 import type { RefractiveLightField } from './refractive-light.js';
 
@@ -9,6 +10,8 @@ export class OpticalTransport {
   private tracedCenter:number[]|null=null;
   private tracedOrigin=[0,0];
   private disposed=false;
+  private lastRevision=-1;
+  private lastCamera=new Vector3(Infinity,Infinity,Infinity);
   readonly optics:RefractiveLightField;
   readonly body:SoftBody;
   readonly camera:PerspectiveCamera;
@@ -35,8 +38,10 @@ export class OpticalTransport {
   }
   update():Promise<void> {
     if(this.pending||this.disposed)return Promise.resolve();
+    if(this.lastRevision===this.body.surfaceRevision&&this.lastCamera.distanceToSquared(this.camera.position)<1e-10)return Promise.resolve();
     return new Promise((resolve,reject)=>{
       this.pending={resolve,reject};
+      this.lastRevision=this.body.surfaceRevision;this.lastCamera.copy(this.camera.position);
       const positions=this.body.surface.positions.slice();
       const normals=new Float32Array(this.body.surface.geometry.attributes.normal.array);
       this.worker.postMessage({type:'frame',positions,normals,center:this.body.center.toArray(),camera:this.camera.position.toArray()},
@@ -48,6 +53,10 @@ export class OpticalTransport {
     // Remove translation latency without animating or inventing a caustic pattern.
     this.optics.origin.set(this.tracedOrigin[0]+this.body.center.x-this.tracedCenter[0],
       this.tracedOrigin[1]+this.body.center.z-this.tracedCenter[2]);
+    // A vertical translation moves a directional shadow by -dy * D.xz / D.y.
+    // Contact/caustic lookup retains its own origin; don't slide contact with the shadow.
+    const dy=this.body.center.y-this.tracedCenter[1],d=this.optics.lightDirection;
+    this.optics.shadowOrigin.copy(this.optics.origin).sub({x:dy*d.x/d.y,y:dy*d.z/d.y});
   }
   dispose(){this.disposed=true;this.pending?.resolve();this.pending=null;this.worker.terminate();}
 }

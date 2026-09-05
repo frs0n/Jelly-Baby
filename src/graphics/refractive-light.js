@@ -2,6 +2,7 @@
 import * as THREE from 'three/webgpu';
 import { uniform } from 'three/tsl';
 import { clamp } from '../physics/constants.js';
+import { depositBeam } from './beam-raster.js';
 const keep = object => object;
   class SurfaceBVH {
     constructor(surface) {
@@ -102,35 +103,24 @@ const keep = object => object;
   class RefractiveLightField {
     constructor(surface, lightDirection, sigma) {
       this.lightDirection=lightDirection; this.sigma=sigma;
-      this.size=192; this.span=.22; this.samples=42; this.origin=new THREE.Vector2();
+      this.size=256; this.span=.22; this.samples=64; this.origin=new THREE.Vector2();
       this.originNode=uniform(this.origin); this.spanNode=uniform(this.span);
+      this.shadowOrigin=new THREE.Vector2();this.shadowOriginNode=uniform(this.shadowOrigin);
       this.bvh=new SurfaceBVH(surface); this.surface=surface;
       this.photons=new Float32Array(this.size*this.size*3);
       this.shadow=new Float32Array(this.size*this.size);
       this.contact=new Float32Array(this.size*this.size);
       this.blurScratch=new Float32Array(this.size*this.size);
-      this.lightBytes=new Uint8Array(this.size*this.size*4);
+      this.lightBytes=new Uint16Array(this.size*this.size*4);
       this.shadowBytes=new Uint8Array(this.size*this.size*4);
       this.lightTexture=this.makeTexture(this.lightBytes);
       this.shadowTexture=this.makeTexture(this.shadowBytes);
-      this.kernel=[]; let sum=0;
-      for(let y=-3;y<=3;y++) for(let x=-3;x<=3;x++) { const w=Math.exp(-(x*x+y*y)/3.5); this.kernel.push([x,y,w]); sum+=w; }
-      for(const k of this.kernel) k[2]/=sum;
     }
     makeTexture(data) {
-      const tex=keep(new THREE.DataTexture(data,this.size,this.size,THREE.RGBAFormat,THREE.UnsignedByteType));
+      const type=data instanceof Uint16Array?THREE.HalfFloatType:THREE.UnsignedByteType;
+      const tex=keep(new THREE.DataTexture(data,this.size,this.size,THREE.RGBAFormat,type));
       tex.minFilter=tex.magFilter=THREE.LinearFilter; tex.generateMipmaps=false;
       tex.colorSpace=THREE.NoColorSpace; tex.needsUpdate=true; return tex;
-    }
-    splat(x,z,channel,energy) {
-      const sx=(x-this.origin.x)/this.span*this.size-.5,sy=(z-this.origin.y)/this.span*this.size-.5;
-      const ix=Math.floor(sx),iy=Math.floor(sy),fx=sx-ix,fy=sy-iy;
-      // Normalised kernels preserve integrated photon flux (except receiver edges).
-      for(const [kx,ky,w] of this.kernel) for(let dy=0;dy<2;dy++) for(let dx=0;dx<2;dx++) {
-        const px=ix+kx+dx,py=iy+ky+dy;
-        if(px<0||px>=this.size||py<0||py>=this.size) continue;
-        this.photons[(py*this.size+px)*3+channel]+=energy*w*(dx?fx:1-fx)*(dy?fy:1-fy);
-      }
     }
     rasterTriangle(a,b,c,buffer,value) {
       const n=this.size,scale=n/this.span;
@@ -186,6 +176,7 @@ const keep = object => object;
       // Follow transport, including the light-space displacement of a lifted body.
       const projectedX=cx-body.center.y*D[0]/D[1],projectedZ=cz-body.center.y*D[2]/D[1];
       this.origin.set((cx+projectedX)/2-this.span/2,(cz+projectedZ)/2-this.span/2);
+      this.shadowOrigin.copy(this.origin);
       for(let t=0;t<ix.length;t+=3) {
         const vertices=[ix[t]*3,ix[t+1]*3,ix[t+2]*3];
         const projected=vertices.map(i=>[p[i]-p[i+1]*D[0]/D[1],p[i+2]-p[i+1]*D[2]/D[1]]);
@@ -201,19 +192,18 @@ const keep = object => object;
         loX=Math.min(loX,x); hiX=Math.max(hiX,x); loZ=Math.min(loZ,z); hiZ=Math.max(hiZ,z);
       }
       const width=hiX-loX+.002,depth=hiZ-loZ+.002; loX-=.001;loZ-=.001;
-      const sampleArea=width*depth/(this.samples*this.samples),pixelArea=(this.span/this.size)**2;
+      const sampleArea=width*depth/(2*this.samples*this.samples),stride=this.samples+1;
+      const rays=Array.from({length:3},()=>new Array(stride*stride).fill(null));
       const sigmas=this.sigma,iors=[1.347,1.350,1.354];
-      for(let y=0;y<this.samples;y++) for(let x=0;x<this.samples;x++) {
-        // Stable stratification avoids temporal random speckle. There is no idle
-        // animation of the light pattern: all motion comes from the mesh.
-        const jx=((x*73+y*37)%101+.5)/101,jy=((x*31+y*83)%103+.5)/103;
-        const o=[loX+(x+.2+.6*jx)/this.samples*width,top,loZ+(y+.2+.6*jy)/this.samples*depth];
+      for(let y=0;y<=this.samples;y++) for(let x=0;x<=this.samples;x++) {
+        // Connected ray bundles transport a continuous footprint, not point noise.
+        const o=[loX+x/this.samples*width,top,loZ+y/this.samples*depth];
         const entry=this.bvh.hit(o,D); if(!entry) continue;
         const en=this.bvh.normal(entry,D,true),entryPoint=o.map((v,a)=>v+D[a]*entry.distance);
         for(let channel=0;channel<3;channel++) {
           const transmitted=refractRay(D,en,1,iors[channel]); if(!transmitted) continue;
           let dir=transmitted.direction,throughput=transmitted.transmission;
-          let start=entryPoint.map((v,a)=>v+dir[a]*2e-6),escaped=false;
+          let start=entryPoint.map((v,a)=>v+dir[a]*2e-6),escaped=false,branch=0;
           for(let bounce=0;bounce<4;bounce++) {
             const exit=this.bvh.hit(start,dir); if(!exit) break;
             throughput*=Math.exp(-sigmas[channel]*exit.distance);
@@ -221,7 +211,7 @@ const keep = object => object;
             const normal=this.bvh.normal(exit,dir,false),refraction=refractRay(dir,normal,iors[channel],1);
             if(refraction) {
               throughput*=refraction.transmission; dir=refraction.direction;
-              start=hitPoint.map((v,a)=>v+dir[a]*2e-6); escaped=true; break;
+              start=hitPoint.map((v,a)=>v+dir[a]*2e-6); escaped=true;branch=bounce; break;
             }
             const dot=dir[0]*normal[0]+dir[1]*normal[1]+dir[2]*normal[2];
             dir=dir.map((v,a)=>v-2*dot*normal[a]); start=hitPoint.map((v,a)=>v+dir[a]*2e-6);
@@ -230,12 +220,24 @@ const keep = object => object;
           const distance=-start[1]/dir[1]; if(distance<=0) continue;
           // Secondary interception is occlusion here, not an invented ray exit.
           if(this.bvh.hit(start,dir,distance)) continue;
-          this.splat(start[0]+dir[0]*distance,start[2]+dir[2]*distance,channel,throughput*sampleArea/pixelArea);
+          rays[channel][y*stride+x]={landing:[start[0]+dir[0]*distance,start[2]+dir[2]*distance],throughput,branch,entryY:entryPoint[1],exitY:start[1]};
+        }
+      }
+      const continuity=Math.max(width,depth)/this.samples*8;
+      for(let channel=0;channel<3;channel++)for(let y=0;y<this.samples;y++)for(let x=0;x<this.samples;x++) {
+        const a=y*stride+x,b=a+1,c=a+stride,d=c+1;
+        for(const ids of [[a,b,d],[a,d,c]]) {
+          const beam=ids.map(id=>rays[channel][id]);if(beam.some(ray=>ray===null))continue;
+          // Do not bridge silhouettes or discontinuous internal-reflection paths.
+          if(beam.some(ray=>ray.branch!==beam[0].branch||Math.abs(ray.entryY-beam[0].entryY)>continuity||Math.abs(ray.exitY-beam[0].exitY)>continuity))continue;
+          const flux=sampleArea*beam.reduce((sum,ray)=>sum+ray.throughput,0)/3;
+          depositBeam(this.photons,this.size,this.origin,this.span,beam.map(ray=>ray.landing),channel,flux);
         }
       }
       for(let i=0;i<this.size*this.size;i++) {
-        for(let c=0;c<3;c++) this.lightBytes[i*4+c]=Math.round(clamp(this.photons[i*3+c]/5,0,1)*255);
-        this.lightBytes[i*4+3]=255;
+        // Linear RGBA16F keeps bright focused flux instead of clipping it at 5×.
+        for(let c=0;c<3;c++) this.lightBytes[i*4+c]=THREE.DataUtils.toHalfFloat(clamp(this.photons[i*3+c],0,60000));
+        this.lightBytes[i*4+3]=THREE.DataUtils.toHalfFloat(1);
         this.shadowBytes[i*4]=Math.round(this.shadow[i]*255);
         this.shadowBytes[i*4+1]=Math.round(this.contact[i]*255);
         this.shadowBytes[i*4+2]=0; this.shadowBytes[i*4+3]=255;

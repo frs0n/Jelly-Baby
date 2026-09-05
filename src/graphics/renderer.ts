@@ -30,7 +30,7 @@ export async function createRenderer(fail:(e:unknown)=>void) {
     if(info.reason==='destroyed'&&!disposing){fail(new Error('WebGPU device was unexpectedly destroyed'));void renderer.setAnimationLoop(null);}
   });
   renderer.outputColorSpace=THREE.SRGBColorSpace;
-  renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.10;
+  renderer.toneMapping=THREE.AgXToneMapping;renderer.toneMappingExposure=1.05;
   renderer.domElement.tabIndex=0;
   renderer.domElement.setAttribute('aria-label','Jelly baby. WASD to walk, Space to jump. Drag the baby to stretch; drag the table to orbit.');
   return renderer;

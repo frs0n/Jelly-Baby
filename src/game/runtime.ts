@@ -1,7 +1,7 @@
 import * as THREE from 'three/webgpu';
 import { SoftBody } from '../physics/soft-body.js';
 import { PHYS } from '../physics/constants.js';
-import { makeBabyCage } from '../physics/baby-cage.ts';
+import { loadBabyCage } from '../physics/baby-cage.ts';
 import { RefractiveLightField } from '../graphics/refractive-light.js';
 import { Baby, ABSORPTION } from '../graphics/baby.ts';
 import { loadEnvironment } from '../graphics/environment.ts';
@@ -11,6 +11,7 @@ import { Input } from './input.ts';
 import { JellySound } from './sound.ts';
 import { createRenderer, resizeView } from '../graphics/renderer.ts';
 import { OpticalTransport } from '../graphics/transport.ts';
+import { createComposite } from '../graphics/composite.ts';
 
 export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
   stage('Starting WebGPU');
@@ -23,10 +24,11 @@ export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
   stage('Reading the light');
   const environment=await loadEnvironment(renderer,scene);
   stage('Making a little jelly');
-  const body=new SoftBody(makeBabyCage());
+  const body=new SoftBody(await loadBabyCage());
   const baby=new Baby(body);scene.add(baby.group);
   const optics=new RefractiveLightField(body.surface,environment.incoming,ABSORPTION);
   const table=await makeTable(optics,environment);scene.add(table.mesh);
+  const composite=createComposite(renderer,scene,camera);
   const sound=new JellySound(),rig=new Locomotion(body);
   rig.onContact=(speed,foot)=>sound.contact(speed,foot);
   let accumulator=0,opticalClock=0,lastTime=0,disposed=false;
@@ -56,7 +58,7 @@ export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
   stage('Compiling the material');
   await renderer.compileAsync(scene,camera);
   stage('Drawing the first frame');
-  renderer.render(scene,camera);
+  composite.render();
   // Fence first-frame GPU work so validation/OOM cannot masquerade as a successful boot.
   const backend=renderer.backend as unknown as {device:GPUDevice};
   await backend.device.queue.onSubmittedWorkDone();
@@ -73,7 +75,7 @@ export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
         accumulator-=PHYS.step;steps++;
       }
       if(steps===12)accumulator=Math.min(accumulator,PHYS.step);
-      if(steps) {
+      if(steps&&body.surfaceDirty) {
         if(!body.isFinite())throw new Error('The soft-body simulation produced an invalid state');
         body.updateSurface();baby.update();
       }
@@ -82,14 +84,14 @@ export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
       table.mesh.position.x=body.center.x;table.mesh.position.z=body.center.z;
       opticalClock+=dt;
       if(opticalClock>=1/24){void transport.update().catch(fail);opticalClock=0;}
-      renderer.render(scene,camera);
+      composite.render();
     }catch(error){fail(error);}
   };
   await renderer.setAnimationLoop(frame);
   const dispose=()=>{
     if(disposed)return;disposed=true;
     void renderer.setAnimationLoop(null);input.dispose();sound.dispose();transport.dispose();resizeObserver.disconnect();cancelAnimationFrame(resizeFrame);
-    baby.dispose();table.dispose();environment.dispose();optics.lightTexture.dispose();optics.shadowTexture.dispose();renderer.dispose();
+    composite.dispose();baby.dispose();table.dispose();environment.dispose();optics.lightTexture.dispose();optics.shadowTexture.dispose();renderer.dispose();
   };
   window.addEventListener('pagehide',event=>{if(!event.persisted)dispose();});
   if(import.meta.hot)import.meta.hot.dispose(dispose);

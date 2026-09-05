@@ -1,0 +1,58 @@
+{
+  "sourceHash": "c34836f03835c578ff5686fb4511ad971c5c269dad049ab03d075155b081dad3",
+  "scale": 0.031051516525765033,
+  "bottom": -1.0399999618530273,
+  "volume": 0.00018100222097291234,
+  "layout": {
+    "positions": {
+      "offset": 0,
+      "length": 216702,
+      "type": "Float32Array"
+    },
+    "normals": {
+      "offset": 866808,
+      "length": 216702,
+      "type": "Float32Array"
+    },
+    "indices": {
+      "offset": 1733616,
+      "length": 433392,
+      "type": "Uint32Array"
+    },
+    "particles": {
+      "offset": 3467184,
+      "length": 2940,
+      "type": "Float64Array"
+    },
+    "tets": {
+      "offset": 3490704,
+      "length": 16104,
+      "type": "Uint32Array"
+    },
+    "volumes": {
+      "offset": 3555120,
+      "length": 4026,
+      "type": "Float64Array"
+    },
+    "bindingIds": {
+      "offset": 3587328,
+      "length": 288936,
+      "type": "Uint32Array"
+    },
+    "bindingWeights": {
+      "offset": 4743072,
+      "length": 288936,
+      "type": "Float64Array"
+    },
+    "tetIds": {
+      "offset": 7054560,
+      "length": 72234,
+      "type": "Uint32Array"
+    },
+    "contacts": {
+      "offset": 7343496,
+      "length": 2138,
+      "type": "Uint32Array"
+    }
+  }
+}
