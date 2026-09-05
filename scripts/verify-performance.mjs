@@ -14,14 +14,14 @@ import { ABSORPTION } from '../src/graphics/baby.ts';
 const inputSource=readFileSync('src/game/input.ts','utf8');
 assert(!inputSource.includes('raycaster.intersectObject(this.mesh'), 'grab start must not scan the 144k visible triangles');
 assert(inputSource.includes('getCoalescedEvents')&&inputSource.includes("e?.type==='pointerup'"), 'abrupt pointer endpoints are latched before release');
+assert(!inputSource.includes('recoverGrabTarget'), 'grab commands must never be rewound after a hard step');
 
-const clock=new FixedStepper(PHYS.step);let ticks=0,now=0;
-assert.equal(clock.advance(1/60,()=>ticks++,8,()=>0),4,'normal frame retains four 240 Hz steps');
-assert.equal(clock.advance(.05,()=>{ticks++;now+=4;},8,()=>now),2,'overload yields at the CPU budget');
-assert.equal(clock.advance(1/60,()=>ticks++,8,()=>now),4,'backlog cannot cause repeated catch-up spikes');
-assert.equal(ticks,10);
-clock.reset();assert.equal(clock.advance(.05,()=>{},8,()=>0),6,'catch-up has an independent step-count limit');
-clock.reset();now=0;assert.equal(clock.advance(1/60,()=>{now+=20;},Infinity,()=>now),4,'active grabbing keeps all normal 240 Hz samples even if a frame exceeds the ordinary CPU budget');
+const clock=new FixedStepper(PHYS.step);let ticks=0;
+assert.equal(clock.advance(1/60,()=>ticks++),4,'normal frame retains four 240 Hz steps');
+assert.equal(clock.advance(.05,()=>ticks++),12,'a 50 ms hitch advances the full 50 ms instead of entering slow motion');
+assert.equal(clock.advance(1/30,()=>ticks++),8,'30 Hz rendering still advances physics in real time');
+assert.equal(ticks,24);
+clock.reset();assert.equal(clock.advance(.05,()=>{}),12,'catch-up covers the complete accepted frame interval');
 
 const receiver=new Float32Array(32*32*3),origin=new Vector2();
 for(const vertices of [[[.1,.2],[.8,.3],[.4,.9]],[[.3,.3],[.30001,.3],[.3,.30001]],[[.1,.1],[.9,.900001],[.9,.9]]]) {

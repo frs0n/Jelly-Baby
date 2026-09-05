@@ -11,7 +11,7 @@ import { PHYS } from '../src/physics/constants.js';
 import { Locomotion } from '../src/game/locomotion.ts';
 import { Baby, ABSORPTION } from '../src/graphics/baby.ts';
 import { RefractiveLightField, SurfaceBVH } from '../src/graphics/refractive-light.js';
-import { surfaceGrab, projectGrabTarget, advanceGrabTarget, recoverGrabTarget } from '../src/physics/grab.ts';
+import { surfaceGrab, projectGrabTarget, advanceGrabTarget } from '../src/physics/grab.ts';
 import { depositBeam } from '../src/graphics/beam-raster.js';
 
 const manifest=JSON.parse(readFileSync('src/assets/model/jelly-baby.json','utf8'));
@@ -139,10 +139,11 @@ torture.grab={...tortureGrab,target:torturePoint.clone(),lambda:new Float64Array
 const rawAbrupt=torturePoint.clone().add(new Vector3(.18,.14,.08)),beforeAbrupt=torture.x.slice();
 for(let i=0;i<2;i++){
   advanceGrabTarget(torture.grab.target,rawAbrupt,PHYS.step,torture.grab.point);
-  torture.step(PHYS.step);recoverGrabTarget(torture.grab.target,torture.grab.point,torture.stepFraction);
+  torture.step(PHYS.step);
 }
 let abruptMovement=0;for(let i=0;i<torture.x.length;i++)abruptMovement=Math.max(abruptMovement,Math.abs(torture.x[i]-beforeAbrupt[i]));
 assert(abruptMovement>1e-5,'two fixed samples of an abrupt drag visibly affect the body');
+assert.equal(torture.stepFraction,1,'orientation protection never time-dilates an abrupt drag');
 torture.grab=null;torture.wake();
 let previous=torture.x.slice(),sameSteps=0,maxSameSteps=0,releaseMovement=0;
 for(let i=0;i<240;i++){
@@ -150,6 +151,7 @@ for(let i=0;i<240;i++){
   for(let j=0;j<torture.x.length;j++)delta=Math.max(delta,Math.abs(torture.x[j]-previous[j]));
   releaseMovement=Math.max(releaseMovement,delta);sameSteps=delta<1e-13?sameSteps+1:0;maxSameSteps=Math.max(maxSameSteps,sameSteps);previous.set(torture.x);
   assert(torture.lastMinJacobian>=.12,'release recovery never inverts a tetrahedron');
+  assert.equal(torture.stepFraction,1,'release recovery always consumes the full fixed timestep');
 }
 assert(releaseMovement>1e-6&&maxSameSteps<8,'hard release continues solving instead of freezing on the orientation boundary');
 

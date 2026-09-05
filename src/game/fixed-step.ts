@@ -1,23 +1,21 @@
-/** Preserve the fixed solver timestep while bounding work after a slow frame. */
-const monotonicNow=()=>performance.now();
-
+/** Fixed 240 Hz stepping without deliberate time dilation. */
 export class FixedStepper {
   private accumulator=0;
   readonly step:number;
   constructor(step:number){this.step=step;}
-  advance(dt:number,simulate:()=>void,budgetMs=8,now:()=>number=monotonicNow) {
+  advance(dt:number,simulate:()=>void) {
+    // Runtime already clamps dt to 50 ms. 12 x 1/240 s covers that entire
+    // interval, so a hitch cannot turn into slow-motion catch-up.
     this.accumulator+=Math.min(.05,Math.max(0,dt));
-    const started=now();let steps=0;
-    while(this.accumulator>=this.step&&steps<6) {
+    let steps=0;
+    while(this.accumulator+1e-12>=this.step&&steps<12) {
       simulate();this.accumulator-=this.step;steps++;
-      // An active grab can opt out of the wall-clock cutoff. The independent
-      // six-step cap still prevents a catch-up spiral, while the pointer never
-      // loses normal 240 Hz solver samples merely because one frame was busy.
-      if(Number.isFinite(budgetMs)&&now()-started>=budgetMs)break;
     }
-    // Discard overload backlog rather than multiply next frame's work. Never
-    // enlarge the physics timestep, which would change the material response.
+    // Only numerical residue should remain because 12 steps cover the full
+    // accepted dt. If an external caller exceeds that contract, drop excess
+    // rather than creating an unbounded spiral.
     if(this.accumulator>=this.step)this.accumulator%=this.step;
+    if(this.accumulator<0)this.accumulator=0;
     return steps;
   }
   reset(){this.accumulator=0;}

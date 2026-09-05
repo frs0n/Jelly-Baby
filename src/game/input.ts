@@ -3,7 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { SoftBody } from '../physics/soft-body.js';
 import type { Locomotion } from './locomotion.ts';
 import type { JellySound } from './sound.ts';
-import { surfaceGrab, projectGrabTarget, advanceGrabTarget, recoverGrabTarget } from '../physics/grab.ts';
+import { surfaceGrab, projectGrabTarget, advanceGrabTarget } from '../physics/grab.ts';
 import { SurfaceBVH } from '../graphics/refractive-light.js';
 
 export class Input {
@@ -186,7 +186,6 @@ export class Input {
   /** Called immediately after body.step() for the same fixed substep. */
   afterPhysicsStep() {
     const grab=this.body.grab;if(!grab)return;
-    recoverGrabTarget(grab.target,grab.point,this.body.stepFraction);
     if(this.releasePending&&this.consumedVersion===this.commandVersion) {
       this.releaseStepsRemaining--;
       if(this.releaseStepsRemaining<=0)this.finishRelease();

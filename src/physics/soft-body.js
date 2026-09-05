@@ -159,7 +159,7 @@ export class SoftBody {
     return J;
   }
   repairOrientation() {
-    for(let pass=0;pass<32;pass++) {
+    for(let pass=0;pass<256;pass++) {
       let minimum=Infinity,worst=null;
       for(const e of this.elements) {
         const a=e.offsets[0],b=e.offsets[1],c=e.offsets[2],d=e.offsets[3],x=this.x;
@@ -167,7 +167,12 @@ export class SoftBody {
         if(J<minimum){minimum=J;worst=e;}
       }
       if(minimum>=.135||!worst)return minimum;
-      this.projectOrientation(worst,.15);
+      const before=minimum;this.projectOrientation(worst,.155);
+      const a=worst.offsets[0],b=worst.offsets[1],c=worst.offsets[2],d=worst.offsets[3],x=this.x;
+      const after=determinant(x[b]-x[a],x[c]-x[a],x[d]-x[a],x[b+1]-x[a+1],x[c+1]-x[a+1],x[d+1]-x[a+1],x[b+2]-x[a+2],x[c+2]-x[a+2],x[d+2]-x[a+2])*worst.inverseRestDet;
+      if(!(after>before+1e-10))for(const id of worst.ids)for(let axis=0;axis<3;axis++) {
+        const i=id*3+axis;this.x[i]=.5*(this.x[i]+this.previous[i]);
+      }
     }
     return this.minimumJacobian();
   }
@@ -184,17 +189,24 @@ export class SoftBody {
     this.stepFraction=1;
     this.lastMinJacobian=this.minimumJacobian(.12);
     if(this.lastMinJacobian>=.12)return 1;
-    this.limitedSteps++;this.repairOrientation();this.lastMinJacobian=this.minimumJacobian(.12);
-    if(this.lastMinJacobian>=.12)return 1;
-    this.candidate.set(this.x);
-    // A constraint can disturb a neighbouring element. Backtrack the complete
-    // substep, including grab/contact, until every element remains orientation-preserving.
-    for(let fraction=.5;fraction>=1/512;fraction*=.5) {
-      for(let i=0;i<this.x.length;i++)this.x[i]=this.previous[i]+fraction*(this.candidate[i]-this.previous[i]);
-      this.lastMinJacobian=this.minimumJacobian(.12);
-      if(this.lastMinJacobian>=.12){this.stepFraction=fraction;return fraction;}
+    this.limitedSteps++;this.lastMinJacobian=this.repairOrientation();
+    // Pathological clusters fall back locally toward the previous valid state.
+    // The rest of the body still advances the full 1/240 s timestep.
+    for(let pass=0;this.lastMinJacobian<.12&&pass<256;pass++) {
+      let minimum=Infinity,worst=null;
+      for(const e of this.elements) {
+        const a=e.offsets[0],b=e.offsets[1],c=e.offsets[2],d=e.offsets[3],x=this.x;
+        const J=determinant(x[b]-x[a],x[c]-x[a],x[d]-x[a],x[b+1]-x[a+1],x[c+1]-x[a+1],x[d+1]-x[a+1],x[b+2]-x[a+2],x[c+2]-x[a+2],x[d+2]-x[a+2])*e.inverseRestDet;
+        if(J<minimum){minimum=J;worst=e;}
+      }
+      if(!worst)break;
+      for(const id of worst.ids)for(let axis=0;axis<3;axis++) {
+        const i=id*3+axis;this.x[i]=.5*(this.x[i]+this.previous[i]);
+      }
+      this.lastMinJacobian=this.repairOrientation();
     }
-    this.x.set(this.previous);this.lastMinJacobian=this.minimumJacobian(.12);this.stepFraction=0;return 0;
+    this.lastMinJacobian=this.minimumJacobian();
+    return 1;
   }
 
   step(h) {
@@ -214,9 +226,8 @@ export class SoftBody {
   }
   stepJS(h) {
     if(this.grab)this.wake();if(this.sleeping)return false;
-    const previousFraction=this.stepFraction;this.stepFraction=1;
+    this.stepFraction=1;
     const x=this.x,v=this.velocity,old=this.previous;
-    if(previousFraction<1)this.repairOrientation();
     old.set(x);this.contact.fill(0);
     const air=Math.exp(-.025*h);
     for(let i=0;i<v.length;i++)v[i]*=air;

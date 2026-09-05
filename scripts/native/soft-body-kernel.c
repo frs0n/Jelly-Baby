@@ -132,17 +132,24 @@ static inline void project_orientation(uint32_t e,double target,double *x,const 
   s=inverse_mass[id]*dl;x[d]+=s*gdx;x[d+1]+=s*gdy;x[d+2]+=s*gdz;
 }
 
-static void repair_orientation(double *x,const double *inverse_mass,const uint32_t *ids,const double *grad) {
-  // Only pathological near-inversion states enter here. Repeatedly project the
-  // single worst tetrahedron instead of sweeping every element: a full sweep
-  // can undo the correction through neighbouring shared vertices and settle
-  // exactly on the line-search floor.
-  for(uint32_t pass=0;pass<32;pass++) {
-    double minimum=1.0/0.0;uint32_t worst=0;
+static double repair_orientation(double *x,const double *previous,const double *inverse_mass,const uint32_t *ids,const double *grad) {
+  // Never shrink the global timestep. Correct only the tetrahedra that cross
+  // the orientation barrier. The previous state is known-valid and is used
+  // only as a local fallback if determinant projection stalls.
+  double minimum=1.0/0.0;
+  for(uint32_t pass=0;pass<256;pass++) {
+    uint32_t worst=0;minimum=1.0/0.0;
     for(uint32_t e=0;e<element_count;e++){double J=tet_jacobian(e,x);if(J<minimum){minimum=J;worst=e;}}
-    if(minimum>=.135)return;
-    project_orientation(worst,.15,x,inverse_mass,ids,grad);
+    if(minimum>=.135)return minimum;
+    const double before=minimum;
+    project_orientation(worst,.155,x,inverse_mass,ids,grad);
+    const double after=tet_jacobian(worst,x);
+    if(previous && !(after>before+1e-10)) {
+      const uint32_t o=worst*4;
+      for(uint32_t q=0;q<4;q++){uint32_t at=ids[o+q]*3;for(uint32_t axis=0;axis<3;axis++)x[at+axis]=.5*(x[at+axis]+previous[at+axis]);}
+    }
   }
+  return minimum_jacobian(x,-1.0/0.0);
 }
 
 static inline void solve_contacts(double floor,double *x,const double *inverse_mass,double *node_contact) {
@@ -151,29 +158,30 @@ static inline void solve_contacts(double floor,double *x,const double *inverse_m
 }
 
 static double preserve_orientation(double *x,const double *previous,double *candidate,double *meta,const double *inverse_mass,const uint32_t *ids,const double *grad) {
+  (void)candidate;
   double minimum=minimum_jacobian(x,.12);meta[1]=minimum;if(minimum>=.12){meta[2]=0;return 1.0;}
   meta[2]=1;
-  // First try to repair the small set of genuinely offending tetrahedra. This
-  // avoids converging the whole body onto the exact J=0.12 line-search floor.
-  repair_orientation(x,inverse_mass,ids,grad);minimum=minimum_jacobian(x,.12);meta[1]=minimum;
-  if(minimum>=.12)return 1.0;
-  for(uint32_t i=0;i<node_count*3;i++)candidate[i]=x[i];
-  for(double fraction=.5;fraction>=1.0/512.0;fraction*=.5) {
-    for(uint32_t i=0;i<node_count*3;i++)x[i]=previous[i]+fraction*(candidate[i]-previous[i]);
-    minimum=minimum_jacobian(x,.12);meta[1]=minimum;if(minimum>=.12)return fraction;
+  minimum=repair_orientation(x,previous,inverse_mass,ids,grad);
+  // Projection normally clears the barrier. If several adjacent elements are
+  // simultaneously pathological, locally blend only the worst tet toward the
+  // known-valid previous state. This preserves the full 1/240 s step for the
+  // rest of the body instead of putting the whole simulation into slow motion.
+  for(uint32_t pass=0;minimum<.12&&pass<256;pass++) {
+    uint32_t worst=0;minimum=1.0/0.0;
+    for(uint32_t e=0;e<element_count;e++){double J=tet_jacobian(e,x);if(J<minimum){minimum=J;worst=e;}}
+    if(minimum>=.12)break;
+    const uint32_t o=worst*4;
+    for(uint32_t q=0;q<4;q++){uint32_t at=ids[o+q]*3;for(uint32_t axis=0;axis<3;axis++)x[at+axis]=.5*(x[at+axis]+previous[at+axis]);}
+    minimum=repair_orientation(x,previous,inverse_mass,ids,grad);
   }
-  for(uint32_t i=0;i<node_count*3;i++)x[i]=previous[i];meta[1]=minimum_jacobian(x,.12);return 0.0;
+  meta[1]=minimum_jacobian(x,-1.0/0.0);
+  return 1.0;
 }
 
 __attribute__((export_name("step"))) void step(double h,uint32_t grab_count,double gravity,double shear,double bulk,double air,double damping,uint32_t iterations,double static_friction,double dynamic_friction,double restitution,double floor,double max_grab_force) {
   double *x=d64(x_p),*previous=d64(previous_p),*candidate=d64(candidate_p),*velocity=d64(velocity_p),*mass=d64(mass_p),*inverse_mass=d64(inverse_mass_p),*node_contact=d64(contact_node_p);
   uint32_t *ids=u32(element_ids_p);double *volume=d64(element_volume_p),*grad=d64(element_gradients_p),*lambdaD=d64(lambda_d_p),*lambdaH=d64(lambda_h_p),*lambdaB=d64(lambda_b_p);
   double *cn=d64(contact_normal_p),*ci=d64(contact_incoming_p),*cw=d64(contact_weights_p);uint32_t *cids=u32(contact_ids_p);double *meta=d64(meta_p);
-  // If a previous line search landed directly on the orientation floor, move
-  // the offending elements a small distance back into the feasible region
-  // before taking the next velocity/elastic step. This is a positional safety
-  // correction, so it intentionally creates no synthetic release impulse.
-  if(meta[14]<1.0)repair_orientation(x,inverse_mass,ids,grad);
   for(uint32_t i=0;i<node_count*3;i++){previous[i]=x[i];node_contact[i/3]=0;velocity[i]*=air;}for(uint32_t i=1;i<node_count*3;i+=3)velocity[i]-=gravity*h;
   for(uint32_t c=0;c<contact_count;c++){cn[c]=0;ci[c]=0;uint32_t o=c*4;for(uint32_t k=0;k<4;k++){uint32_t id=cids[o+k];ci[c]+=velocity[id*3+1]*cw[o+k];}}
   for(uint32_t i=0;i<node_count*3;i++)x[i]+=velocity[i]*h;for(uint32_t e=0;e<element_count;e++)lambdaD[e]=lambdaH[e]=lambdaB[e]=0;for(uint32_t k=0;k<3;k++)d64(grab_lambda_p)[k]=0;
