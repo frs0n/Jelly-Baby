@@ -26,14 +26,21 @@ bounded work and perceptually close approximations where full simulation causes 
   artificial rest stress; whole-step backtracking prevents inverted elements.
   The 240 Hz fixed step matches `refs/jelly-webgpu.html`. Gravity is deliberately
   reduced to 2.4 m/s², with a smaller jump impulse for a gentle, floating hop.
-  Solver and surface deformation loops reuse storage. Catch-up work yields after
-  8 ms or six substeps, dropping overload backlog while keeping the fixed timestep.
-- The displayed body is the exact marching-tetrahedra mesh from
+  The exact same solver is executed by a small embedded WebAssembly kernel so the
+  4,026 tetrahedra and full-resolution surface no longer monopolize the JS main
+  thread. A JavaScript fallback retains the same equations if WebAssembly is
+  unavailable. Catch-up work normally yields after 8 ms or six substeps; during
+  an active grab the wall-clock cutoff is disabled while the six-step cap remains,
+  so pointer response cannot lose ordinary 240 Hz samples under a transient frame spike.
+- The displayed body is still the exact marching-tetrahedra mesh from
   `refs/jelly_baby_mesh.html`, uniformly scaled to 7 cm: 72,234 indexed vertices,
   144,464 triangles and no open edges. `npm run build:model` regenerates its binary
   asset and source hash. A regular tetrahedral cage deforms those vertices through
   barycentric embedding; contacts lie on the actual visible surface. The original
-  smooth SDF normals follow the deformation. The face follows the skin. Details are
+  smooth SDF normals follow the deformation. Position and normal BufferAttributes
+  remain the fully deformed CPU surface used by rendering, picking and facial
+  attachment; there is no lower-poly or shader-only visual substitute. The face
+  follows the skin. Details are
   tessellated, kept outside the skin, and drawn after transmission so they cannot
   contaminate the opaque refraction buffer and produce duplicate images.
 - `src/game/locomotion.ts` supplies a powered posture and gait through nodal
@@ -91,13 +98,15 @@ light reaching the floor. Regressions also check roundness, airborne duration,
 facial render ordering, grab projection before/after deformation, floor targeting,
 and caustic color/flux, subpixel beam conservation, element orientation, zero-force
 rest energy, complete idle sleep, and the generated model's source hash. Performance
-regressions check bounded catch-up, proxy flux/thickness agreement, and the actual
-worker's transferable two-stage response and camera-only reuse.
+regressions check bounded catch-up, active-grab step retention, byte-for-byte
+visible position/normal equivalence with the original embedding, proxy
+flux/thickness agreement, and the actual worker's transferable two-stage response
+and camera-only reuse.
 
-`npm run benchmark` reports CPU timings for walking and a severe stretch. In the
-local Node benchmark, stretch physics fell from about 28 to 8 ms per four substeps,
-surface deformation from 8 to 3 ms, caustics from 89 to 32 ms, and thickness from
-75 to 9 ms. These are CPU measurements, not browser frame-rate claims.
+`npm run benchmark` reports CPU timings for walking and a severe stretch. The
+optimization is intended to reduce main-thread solver/surface time without changing
+mesh resolution, material parameters, grab constants, XPBD iteration order, or the
+resulting visible positions/normals.
 
 Per project instructions, no development server or browser inspection was run
 during implementation. GPU shader execution, visual quality, touch feel, and sound

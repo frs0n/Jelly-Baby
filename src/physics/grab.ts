@@ -29,11 +29,50 @@ export function projectGrabTarget(ray:Ray,dragPlane:Plane,out:Vector3) {
   return true;
 }
 
-export function advanceGrabTarget(target:Vector3,desired:Vector3,h:number) {
-  const dx=desired.x-target.x,dy=desired.y-target.y,dz=desired.z-target.z;
+// The pointer itself may jump arbitrarily far in one browser event. Keep that
+// command, but never let the XPBD servo accumulate enough lead to sit at its
+// force clamp indefinitely. Normal/local dragging stays on the original fast
+// 85 s^-1 / 1.8 m/s response; only pathological lead is bounded.
+export const MAX_RAW_GRAB_LEAD=.14;
+export const MAX_SOLVER_GRAB_LEAD=.022;
+
+export function advanceGrabTarget(target:Vector3,desired:Vector3,h:number,actual?:Vector3) {
+  let desiredX=desired.x,desiredY=desired.y,desiredZ=desired.z;
+  if(actual) {
+    const ax=desiredX-actual.x,ay=desiredY-actual.y,az=desiredZ-actual.z;
+    const ad=Math.hypot(ax,ay,az);
+    if(ad>MAX_RAW_GRAB_LEAD) {
+      const s=MAX_RAW_GRAB_LEAD/ad;
+      desiredX=actual.x+ax*s;desiredY=actual.y+ay*s;desiredZ=actual.z+az*s;
+    }
+  }
+  const dx=desiredX-target.x,dy=desiredY-target.y,dz=desiredZ-target.z;
   const distance=Math.hypot(dx,dy,dz);
-  if(distance===0)return;
-  // The force-limited XPBD grip supplies compliance; don't hide it behind a slow pointer.
-  const fraction=Math.min(1-Math.exp(-85*h),1.8*h/distance);
-  target.x+=dx*fraction;target.y+=dy*fraction;target.z+=dz*fraction;
+  if(distance>0) {
+    // The force-limited XPBD grip supplies compliance; don't hide it behind a slow pointer.
+    const fraction=Math.min(1-Math.exp(-85*h),1.8*h/distance);
+    target.x+=dx*fraction;target.y+=dy*fraction;target.z+=dz*fraction;
+  }
+  if(actual) {
+    const lx=target.x-actual.x,ly=target.y-actual.y,lz=target.z-actual.z;
+    const lead=Math.hypot(lx,ly,lz);
+    if(lead>MAX_SOLVER_GRAB_LEAD) {
+      const s=MAX_SOLVER_GRAB_LEAD/lead;
+      target.x=actual.x+lx*s;target.y=actual.y+ly*s;target.z=actual.z+lz*s;
+    }
+  }
+}
+
+/**
+ * A heavily backtracked orientation step means the requested servo force was
+ * not feasible for this configuration. Rewind only the servo lead; never touch
+ * the pointer command or the jelly state. The next 240 Hz step can then recover
+ * and immediately resume chasing the same pointer position.
+ */
+export function recoverGrabTarget(target:Vector3,actual:Vector3,acceptedFraction:number) {
+  if(acceptedFraction>=.5)return;
+  const keep=Math.max(0,Math.min(1,acceptedFraction*2));
+  target.x=actual.x+(target.x-actual.x)*keep;
+  target.y=actual.y+(target.y-actual.y)*keep;
+  target.z=actual.z+(target.z-actual.z)*keep;
 }

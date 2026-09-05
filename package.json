@@ -8,6 +8,7 @@
     "lint": "eslint src scripts eslint.config.js",
     "typecheck": "tsc --noEmit",
     "build:model": "node scripts/build-model.mjs",
+    "build:kernel": "node scripts/build-kernel.mjs",
     "test:physics": "node --experimental-strip-types scripts/verify-physics.mjs",
     "test:performance": "node --experimental-strip-types scripts/verify-performance.mjs",
     "benchmark": "node --experimental-strip-types scripts/benchmark.mjs",

@@ -11,7 +11,7 @@ import { PHYS } from '../src/physics/constants.js';
 import { Locomotion } from '../src/game/locomotion.ts';
 import { Baby, ABSORPTION } from '../src/graphics/baby.ts';
 import { RefractiveLightField, SurfaceBVH } from '../src/graphics/refractive-light.js';
-import { surfaceGrab, projectGrabTarget, advanceGrabTarget } from '../src/physics/grab.ts';
+import { surfaceGrab, projectGrabTarget, advanceGrabTarget, recoverGrabTarget } from '../src/physics/grab.ts';
 import { depositBeam } from '../src/graphics/beam-raster.js';
 
 const manifest=JSON.parse(readFileSync('src/assets/model/jelly-baby.json','utf8'));
@@ -124,6 +124,35 @@ assert(pickRay.ray.distanceToPoint(projectedTarget)<1e-9&&projectedTarget.y>=.00
 const responsive=new Vector3(),desired=new Vector3(.01,.01,0);
 for(let i=0;i<8;i++)advanceGrabTarget(responsive,desired,PHYS.step);
 assert(responsive.distanceTo(desired)<.001,'pointer response settles within 34 ms');
+
+// Regress the two interaction failures reported in the game: a very abrupt
+// pointer command must move the body, and an extreme release must not leave
+// orientation protection repeating the same state forever.
+const torture=new SoftBody(loadModel());torture.canSleep=false;
+for(let i=0;i<180;i++)torture.step(PHYS.step);torture.updateSurface();
+const tortureBVH=new SurfaceBVH(torture.surface),topOrigin=[torture.center.x,torture.center.y+.15,torture.center.z];
+const tortureHit=tortureBVH.hit(topOrigin,[0,-1,0]);assert(tortureHit);
+const tortureIds=torture.surface.indices.slice(tortureHit.t*3,tortureHit.t*3+3);
+const torturePoint=new Vector3(topOrigin[0],topOrigin[1]-tortureHit.distance,topOrigin[2]);
+const tortureGrab=surfaceGrab(torture,{a:tortureIds[0],b:tortureIds[1],c:tortureIds[2]},torturePoint);assert(tortureGrab);
+torture.grab={...tortureGrab,target:torturePoint.clone(),lambda:new Float64Array(3)};
+const rawAbrupt=torturePoint.clone().add(new Vector3(.18,.14,.08)),beforeAbrupt=torture.x.slice();
+for(let i=0;i<2;i++){
+  advanceGrabTarget(torture.grab.target,rawAbrupt,PHYS.step,torture.grab.point);
+  torture.step(PHYS.step);recoverGrabTarget(torture.grab.target,torture.grab.point,torture.stepFraction);
+}
+let abruptMovement=0;for(let i=0;i<torture.x.length;i++)abruptMovement=Math.max(abruptMovement,Math.abs(torture.x[i]-beforeAbrupt[i]));
+assert(abruptMovement>1e-5,'two fixed samples of an abrupt drag visibly affect the body');
+torture.grab=null;torture.wake();
+let previous=torture.x.slice(),sameSteps=0,maxSameSteps=0,releaseMovement=0;
+for(let i=0;i<240;i++){
+  torture.step(PHYS.step);let delta=0;
+  for(let j=0;j<torture.x.length;j++)delta=Math.max(delta,Math.abs(torture.x[j]-previous[j]));
+  releaseMovement=Math.max(releaseMovement,delta);sameSteps=delta<1e-13?sameSteps+1:0;maxSameSteps=Math.max(maxSameSteps,sameSteps);previous.set(torture.x);
+  assert(torture.lastMinJacobian>=.12,'release recovery never inverts a tetrahedron');
+}
+assert(releaseMovement>1e-6&&maxSameSteps<8,'hard release continues solving instead of freezing on the orientation boundary');
+
 const bytes=readFileSync('src/assets/bg_room.exr');
 const exr=new EXRLoader().setDataType(HalfFloatType).parse(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength));
 const studio=shapeStudioLight(exr,measureWindow(exr).incoming.negate());

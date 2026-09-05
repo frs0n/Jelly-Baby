@@ -71,8 +71,8 @@ export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
       const dt=Math.min(.05,Math.max(0,(time-lastTime)/1000));lastTime=time;
       if(document.hidden){physicsClock.reset();return;}
       const steps=physicsClock.advance(dt,()=>{
-        input.step(PHYS.step);rig.step(PHYS.step);body.step(PHYS.step);rig.afterStep();
-      });
+        input.step(PHYS.step);rig.step(PHYS.step);body.step(PHYS.step);input.afterPhysicsStep();rig.afterStep();
+      },body.grab?Infinity:8);
       if(steps&&body.surfaceDirty) {
         if(!body.isFinite())throw new Error('The soft-body simulation produced an invalid state');
         body.updateSurface();baby.update();

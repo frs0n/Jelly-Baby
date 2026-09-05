@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { Vector2, Vector3 } from 'three/webgpu';
 import { loadModel } from './load-model.mjs';
 import { SoftBody } from '../src/physics/soft-body.js';
@@ -10,12 +11,17 @@ import { depositBeam } from '../src/graphics/beam-raster.js';
 import { RefractiveLightField } from '../src/graphics/refractive-light.js';
 import { ABSORPTION } from '../src/graphics/baby.ts';
 
+const inputSource=readFileSync('src/game/input.ts','utf8');
+assert(!inputSource.includes('raycaster.intersectObject(this.mesh'), 'grab start must not scan the 144k visible triangles');
+assert(inputSource.includes('getCoalescedEvents')&&inputSource.includes("e?.type==='pointerup'"), 'abrupt pointer endpoints are latched before release');
+
 const clock=new FixedStepper(PHYS.step);let ticks=0,now=0;
-assert.equal(clock.advance(1/60,()=>ticks++,()=>0),4,'normal frame retains four 240 Hz steps');
-assert.equal(clock.advance(.05,()=>{ticks++;now+=4;},()=>now),2,'overload yields at the CPU budget');
-assert.equal(clock.advance(1/60,()=>ticks++,()=>now),4,'backlog cannot cause repeated catch-up spikes');
+assert.equal(clock.advance(1/60,()=>ticks++,8,()=>0),4,'normal frame retains four 240 Hz steps');
+assert.equal(clock.advance(.05,()=>{ticks++;now+=4;},8,()=>now),2,'overload yields at the CPU budget');
+assert.equal(clock.advance(1/60,()=>ticks++,8,()=>now),4,'backlog cannot cause repeated catch-up spikes');
 assert.equal(ticks,10);
-clock.reset();assert.equal(clock.advance(.05,()=>{},()=>0),6,'catch-up has an independent step-count limit');
+clock.reset();assert.equal(clock.advance(.05,()=>{},8,()=>0),6,'catch-up has an independent step-count limit');
+clock.reset();now=0;assert.equal(clock.advance(1/60,()=>{now+=20;},Infinity,()=>now),4,'active grabbing keeps all normal 240 Hz samples even if a frame exceeds the ordinary CPU budget');
 
 const receiver=new Float32Array(32*32*3),origin=new Vector2();
 for(const vertices of [[[.1,.2],[.8,.3],[.4,.9]],[[.3,.3],[.30001,.3],[.3,.30001]],[[.1,.1],[.9,.900001],[.9,.9]]]) {
@@ -28,6 +34,19 @@ for(const vertices of [[[.1,.2],[.8,.3],[.4,.9]],[[.3,.3],[.30001,.3],[.3,.30001
 
 const body=new SoftBody(loadModel()),rig=new Locomotion(body);
 for(let i=0;i<240;i++){rig.step(PHYS.step);body.step(PHYS.step);}body.updateSurface();
+assert(body.kernel,'WebAssembly soft-body accelerator is active');
+// Rendering remains byte-for-byte the original full-resolution CPU embedding.
+// The accelerator changes execution location only; it does not introduce a second
+// visual mesh or shader-only deformation path.
+const referenceModel=loadModel();
+deformSurface(referenceModel.surface,body.x,body.nodalF);
+let maxPositionError=0,maxNormalError=0;
+for(let i=0;i<body.surface.positions.length;i++) {
+  maxPositionError=Math.max(maxPositionError,Math.abs(body.surface.positions[i]-referenceModel.surface.positions[i]));
+  maxNormalError=Math.max(maxNormalError,Math.abs(body.surface.geometry.attributes.normal.array[i]-referenceModel.surface.geometry.attributes.normal.array[i]));
+}
+assert.equal(maxPositionError,0,'accelerated visible positions exactly match the original CPU embedding');
+assert.equal(maxNormalError,0,'accelerated visible normals exactly match the original CPU embedding');
 const proxy=body.cage.opticalSurface;deformSurface(proxy,body.x,body.nodalF);
 assert.equal(body.surface.positions.length/3,72234,'visible mesh remains at full resolution');
 assert(proxy.positions.length<body.surface.positions.length/6,'only the optical calculation uses the proxy');
@@ -66,5 +85,5 @@ messages.length=0;
 globalThis.self.onmessage({data:{type:'frame',particles:null,nodalF:null,center:body.center.toArray(),camera:camera.position.toArray()}});
 assert.equal(messages.length,1);assert(messages[0].thickness&&!messages[0].light,'camera-only updates reuse caustics');
 globalThis.self=previousSelf;
-console.log('PASS — bounded frame work, RGB beam conservation, optical proxy and worker protocol',
+console.log('PASS — exact visible embedding, responsive fixed-step work, RGB beam conservation, optical proxy and worker protocol',
   {proxyFluxRatio:proxyFlux.map((v,i)=>v/originalFlux[i]),thicknessRmsMm:rms*1000});
