@@ -3,7 +3,7 @@ import type { PerspectiveCamera } from 'three/webgpu';
 import type { SoftBody } from '../physics/soft-body.js';
 import type { RefractiveLightField } from './refractive-light.js';
 
-/** Compact cage snapshots feed an optical proxy; one request in flight, no backlog. */
+/** View thickness and the legacy shadow/contact field stay asynchronous; caustics are GPU-frame-synchronous. */
 export class OpticalTransport {
   private worker:Worker;
   private pending:{resolve:()=>void;reject:(e:Error)=>void}|null=null;
@@ -16,21 +16,20 @@ export class OpticalTransport {
   readonly optics:RefractiveLightField;
   readonly body:SoftBody;
   readonly camera:PerspectiveCamera;
-  constructor(optics:RefractiveLightField,body:SoftBody,camera:PerspectiveCamera,direction:Vector3,sigma:number[],fail:(error:Error)=>void) {
+  constructor(optics:RefractiveLightField,body:SoftBody,camera:PerspectiveCamera,direction:Vector3,fail:(error:Error)=>void) {
     this.optics=optics;this.body=body;this.camera=camera;
     this.worker=new Worker(new URL('./transport.worker.ts',import.meta.url),{type:'module'});
     const surface=body.cage.opticalSurface;
     this.worker.postMessage({type:'init',indices:surface.indices,positions:surface.positions,
-      restNormals:surface.restNormals,bindingIds:surface.bindingIds,bindingWeights:surface.bindingWeights,direction:direction.toArray(),sigma});
+      restNormals:surface.restNormals,bindingIds:surface.bindingIds,bindingWeights:surface.bindingWeights,direction:direction.toArray()});
     this.worker.onmessage=({data})=>{
       if(this.disposed)return;
       if(data.error){const error=new Error(`Light transport: ${data.error}`);this.pending?.reject(error);this.pending=null;fail(error);return;}
-      if(data.light) {
-        optics.lightBytes.set(data.light);optics.shadowBytes.set(data.shadow);
-        optics.lightTexture.needsUpdate=true;optics.shadowTexture.needsUpdate=true;
-        optics.span=data.span;optics.spanNode.value=data.span;
+      if(data.shadow) {
+        optics.shadowBytes.set(data.shadow);optics.shadowTexture.needsUpdate=true;
+        optics.shadowSpan=data.span;optics.shadowSpanNode.value=data.span;
         this.tracedCenter=data.center;this.tracedOrigin=data.origin;this.follow();
-        return; // Publish light immediately; thickness arrives separately.
+        return;
       }
       const out=body.surface.geometry.attributes.opticalThickness.array,ids=body.cage.thicknessIds,weights=body.cage.thicknessWeights;
       for(let i=0,j=0;i<out.length;i++,j+=3)out[i]=data.thickness[ids[j]]*weights[j]+data.thickness[ids[j+1]]*weights[j+1]+data.thickness[ids[j+2]]*weights[j+2];
@@ -58,13 +57,10 @@ export class OpticalTransport {
   }
   follow() {
     if(!this.tracedCenter)return;
-    // Remove translation latency without animating or inventing a caustic pattern.
-    this.optics.origin.set(this.tracedOrigin[0]+this.body.center.x-this.tracedCenter[0],
-      this.tracedOrigin[1]+this.body.center.z-this.tracedCenter[2]);
-    // A vertical translation moves a directional shadow by -dy * D.xz / D.y.
-    // Contact/caustic lookup retains its own origin; don't slide contact with the shadow.
+    const dx=this.body.center.x-this.tracedCenter[0],dz=this.body.center.z-this.tracedCenter[2];
+    this.optics.contactOrigin.set(this.tracedOrigin[0]+dx,this.tracedOrigin[1]+dz);
     const dy=this.body.center.y-this.tracedCenter[1],d=this.optics.lightDirection;
-    this.optics.shadowOrigin.copy(this.optics.origin).sub({x:dy*d.x/d.y,y:dy*d.z/d.y});
+    this.optics.shadowOrigin.copy(this.optics.contactOrigin).sub({x:dy*d.x/d.y,y:dy*d.z/d.y});
   }
   dispose(){this.disposed=true;this.pending?.resolve();this.pending=null;this.worker.terminate();}
 }

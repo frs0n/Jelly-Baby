@@ -36,7 +36,7 @@ export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
   let lastTime=0,disposed=false;
   const reset=()=>{input.recenter();body.reset();physicsClock.reset();};
   const input=new Input(camera,renderer.domElement,body,baby.mesh,rig,sound,reset);
-  const transport=new OpticalTransport(optics,body,camera,environment.incoming,ABSORPTION,fail);
+  const transport=new OpticalTransport(optics,body,camera,environment.incoming,fail);
   const resize=()=>resizeView(renderer,camera,input.controls);
   let resizeFrame=0;
   const resizeObserver=new ResizeObserver(()=>{
@@ -56,6 +56,7 @@ export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
   // Let contact establish itself before displaying the first frame.
   for(let i=0;i<80;i++){rig.step(PHYS.step);body.step(PHYS.step);}
   body.updateSurface();baby.update();input.update(1);
+  optics.update(renderer,body,true);
   await transport.update();
   stage('Compiling the material');
   await renderer.compileAsync(scene,camera);
@@ -79,6 +80,7 @@ export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
       }
       input.update(dt);
       transport.follow();
+      optics.update(renderer,body);
       table.mesh.position.x=body.center.x;table.mesh.position.z=body.center.z;
       void transport.update().catch(fail);
       composite.render();
@@ -88,7 +90,7 @@ export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
   const dispose=()=>{
     if(disposed)return;disposed=true;
     void renderer.setAnimationLoop(null);input.dispose();sound.dispose();transport.dispose();resizeObserver.disconnect();cancelAnimationFrame(resizeFrame);
-    composite.dispose();baby.dispose();table.dispose();environment.dispose();optics.lightTexture.dispose();optics.shadowTexture.dispose();renderer.dispose();
+    composite.dispose();baby.dispose();table.dispose();environment.dispose();optics.dispose();renderer.dispose();
   };
   window.addEventListener('pagehide',event=>{if(!event.persisted)dispose();});
   if(import.meta.hot)import.meta.hot.dispose(dispose);

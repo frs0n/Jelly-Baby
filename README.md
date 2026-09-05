@@ -4,7 +4,6 @@ A WebGPU-only, Three.js r185 playground. The supplied EXR lights the scene; the
 wood maps repeat every 2.5 metres. The baby is modelled at approximately 7 cm.
 
 ![Jelly Baby](assets/screenshot.jpeg)
-***Play live at https://jelly.scottsun.io***
 
 ```sh
 npm run dev

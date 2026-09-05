@@ -13,10 +13,12 @@ export async function makeTable(optics:RefractiveLightField,light:{color:THREE.C
   const uv=positionWorld.xz.div(2.5).add(.5);
   const opticalUV=positionWorld.xz.sub(optics.originNode).div(optics.spanNode);
   const inside=float(opticalUV.x.greaterThan(0).and(opticalUV.x.lessThan(1)).and(opticalUV.y.greaterThan(0)).and(opticalUV.y.lessThan(1)));
-  const shadowUV=positionWorld.xz.sub(optics.shadowOriginNode).div(optics.spanNode);
+  const shadowUV=positionWorld.xz.sub(optics.shadowOriginNode).div(optics.shadowSpanNode);
   const shadowInside=float(shadowUV.x.greaterThan(0).and(shadowUV.x.lessThan(1)).and(shadowUV.y.greaterThan(0)).and(shadowUV.y.lessThan(1)));
   const shadow=texture(optics.shadowTexture,shadowUV).r.mul(shadowInside);
-  const contact=texture(optics.shadowTexture,opticalUV).g.mul(inside);
+  const contactUV=positionWorld.xz.sub(optics.contactOriginNode).div(optics.shadowSpanNode);
+  const contactInside=float(contactUV.x.greaterThan(0).and(contactUV.x.lessThan(1)).and(contactUV.y.greaterThan(0)).and(contactUV.y.lessThan(1)));
+  const contact=texture(optics.shadowTexture,contactUV).g.mul(contactInside);
   const albedo=texture(base,uv).rgb;
   const material=new THREE.MeshPhysicalNodeMaterial({metalness:0,roughness:.26,clearcoat:.38,clearcoatRoughness:.23});
   material.colorNode=albedo.mul(float(1).sub(shadow.mul(light.windowFraction))).mul(float(1).sub(contact.mul(.40)));

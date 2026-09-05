@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { Vector2, Vector3, PerspectiveCamera, HalfFloatType, Raycaster, Plane, DataUtils } from 'three/webgpu';
+import { Vector2, Vector3, PerspectiveCamera, HalfFloatType, Raycaster, Plane } from 'three/webgpu';
 import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
 import { measureWindow } from '../src/graphics/environment.ts';
 import { shapeStudioLight, STUDIO_KEY } from '../src/graphics/studio-light.ts';
@@ -10,19 +10,12 @@ import { SoftBody } from '../src/physics/soft-body.js';
 import { PHYS } from '../src/physics/constants.js';
 import { Locomotion } from '../src/game/locomotion.ts';
 import { Baby, ABSORPTION } from '../src/graphics/baby.ts';
-import { RefractiveLightField, SurfaceBVH } from '../src/graphics/refractive-light.js';
+import { OpticalShadowField, RefractiveLightField, SurfaceBVH, updateViewThickness } from '../src/graphics/refractive-light.js';
 import { surfaceGrab, projectGrabTarget, advanceGrabTarget } from '../src/physics/grab.ts';
-import { depositBeam } from '../src/graphics/beam-raster.js';
+import { deformSurface } from '../src/physics/deform-surface.js';
 
 const manifest=JSON.parse(readFileSync('src/assets/model/jelly-baby.json','utf8'));
 assert.equal(manifest.sourceHash,createHash('sha256').update(readFileSync('refs/jelly_baby_mesh.html')).digest('hex'),'generated model matches the supplied source');
-const receiver=new Float32Array(32*32*3);
-// Subpixel and folded beams must preserve flux, independently of footprint area.
-for(const triangle of [[[.1,.2],[.8,.3],[.4,.9]],[[.3,.3],[.30001,.3],[.3,.30001]]]) {
-  receiver.fill(0);depositBeam(receiver,32,new Vector2(),1,triangle,1,.002);
-  assert(Math.abs(receiver.reduce((sum,v)=>sum+v,0)/1024-.002)<1e-8,'beam footprint conserves integrated flux');
-}
-
 const passive=new SoftBody(loadModel()),gravity=PHYS.gravity;
 PHYS.gravity=0;passive.canSleep=false;
 for(let i=1;i<passive.x.length;i+=3)passive.x[i]+=.01;
@@ -162,16 +155,20 @@ const light=measureWindow(studio);
 console.log('HDR window',{incoming:light.incoming.toArray(),irradiance:light.irradiance,fraction:light.windowFraction,color:light.color.toArray()});
 assert(light.incoming.y<-.45&&light.incoming.clone().negate().dot(STUDIO_KEY)>.9,'reflections and transport use the same elevated HDR key');
 assert(light.windowFraction>.35,'window supplies a legible, measured shadow contribution');
-const optics=new RefractiveLightField(body.surface,light.incoming,ABSORPTION);
+const opticalSurface=body.cage.opticalSurface;
+deformSurface(opticalSurface,body.x,body.nodalF);
+const opticalBVH=new SurfaceBVH(opticalSurface);
+const shadowField=new OpticalShadowField(opticalSurface,light.incoming);
 const camera=new PerspectiveCamera();camera.position.set(.08,.13,.19);
-let t=performance.now();optics.update(body);console.log('transport ms',performance.now()-t);
-t=performance.now();optics.updateViewThickness(camera);console.log('thickness ms',performance.now()-t);
-assert(optics.lightBytes.some((v,i)=>i%4!==3&&v>0),'refracted photons reach table');
-assert(Math.max(...optics.shadow)>.9,'deformed geometry casts a full directional shadow');
-const pixelArea=(optics.span/optics.size)**2,flux=[0,0,0];
-for(let i=0;i<optics.size*optics.size;i++)for(let c=0;c<3;c++)flux[c]+=DataUtils.fromHalfFloat(optics.lightBytes[i*4+c])*pixelArea;
-assert(flux[1]>flux[0]&&flux[1]>flux[2],'caustic absorption has the same green spectral signature as the jelly');
-assert(optics.span<.3,'grounded receiver keeps enough resolution for contact and caustics');
-console.log('optical flux',flux);
-assert([...body.surface.geometry.attributes.opticalThickness.array].every(Number.isFinite),'finite optical thickness');
-console.log('PASS — settle, walk, turn, jump, grab, release, recovery, caustics; seconds:',(performance.now()-started)/1000);
+let t=performance.now();shadowField.update({center:body.center});console.log('shadow/contact ms',performance.now()-t);
+t=performance.now();updateViewThickness(opticalSurface,opticalBVH,camera);console.log('thickness ms',performance.now()-t);
+assert(Math.max(...shadowField.shadow)>.9,'deformed optical proxy casts a full directional shadow');
+assert(shadowField.span<.3,'grounded receiver keeps enough resolution for shadow/contact');
+assert([...opticalSurface.geometry.attributes.opticalThickness.array].every(Number.isFinite),'finite optical thickness');
+// The caustic itself is now a GPU render pass, so the Node test verifies that the
+// GPU field graph/targets construct successfully; pixel output is covered by browser/runtime validation.
+const optics=new RefractiveLightField(opticalSurface,light.incoming,ABSORPTION);
+assert.equal(optics.lightTexture,optics.causticTarget.texture,'table samples the GPU caustic render target');
+assert(optics.frontTarget&&optics.backTarget&&optics.rawCausticTarget,'GPU caustic light-space targets are configured');
+optics.dispose();
+console.log('PASS — settle, walk, turn, jump, grab, release, recovery, optical shadow/thickness and GPU caustic graph; seconds:',(performance.now()-started)/1000);
