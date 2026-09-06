@@ -42,7 +42,7 @@ export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
   rig.onContact=(speed,foot)=>sound.contact(speed,foot);
   const physicsClock=new FixedStepper(PHYS.step);
   let lastTime=0,disposed=false;
-  const reset=()=>{input.recenter();body.reset();physicsClock.reset();};
+  const reset=()=>{input.recenter();body.reset();baby.resetFace();physicsClock.reset();};
   const input=new Input(camera,renderer.domElement,body,baby.mesh,rig,sound,reset);
   const transport=new OpticalTransport(optics,body,camera,environment.incoming,fail);
   const resize=()=>resizeView(renderer,camera,input.controls);
@@ -84,8 +84,9 @@ export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
       });
       if(steps&&body.surfaceDirty) {
         if(!body.isFinite())throw new Error('The soft-body simulation produced an invalid state');
-        body.updateSurface();baby.update();
+        body.updateSurface();
       }
+      baby.update(dt);
       input.update(dt);
       transport.follow();
       optics.update(renderer,body);
