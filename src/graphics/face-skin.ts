@@ -5,9 +5,10 @@ import type { SoftBody } from '../physics/soft-body.js';
  * The small spatial bins avoid raycasts and stencil rebuilds per frame. */
 export class FaceSkin {
   private readonly rest:Float32Array;
-  private readonly bins=new Map<string,number[]>();
+  private readonly bins=new Map<number,number[]>();
   private readonly cell=.002;
   private readonly body:SoftBody;
+  private readonly scratch=new Float64Array(3);
   constructor(body:SoftBody) {
     this.body=body;
     this.rest=new Float32Array(body.surface.positions);
@@ -20,15 +21,18 @@ export class FaceSkin {
       const minY=Math.max(.025,Math.min(p[a+1],p[b+1],p[c+1])),maxY=Math.min(.062,Math.max(p[a+1],p[b+1],p[c+1]));
       for(let x=Math.floor(minX/this.cell);x<=Math.floor(maxX/this.cell);x++)
         for(let y=Math.floor(minY/this.cell);y<=Math.floor(maxY/this.cell);y++) {
-          const key=`${x},${y}`,bin=this.bins.get(key);
+          const key=this.key(x,y),bin=this.bins.get(key);
           if(bin)bin.push(t);else this.bins.set(key,[t]);
         }
     }
   }
-  // out contains deformed xyz followed by its unit normal.
-  sample(x:number,y:number,offset:number,out:Float64Array) {
+  private key(x:number,y:number){return (x+512)*1024+(y+512);}
+  /** Find the frontmost rest triangle under an XY point, as [triangle,u,v].
+   * The answer depends only on the undeformed skin, so callers may keep it for as
+   * long as the expression holds that vertex at the same rest coordinate. */
+  locate(x:number,y:number,out:Float64Array,at=0) {
     const p=this.rest,ix=this.body.surface.indices;
-    const bin=this.bins.get(`${Math.floor(x/this.cell)},${Math.floor(y/this.cell)}`);
+    const bin=this.bins.get(this.key(Math.floor(x/this.cell),Math.floor(y/this.cell)));
     let best=-Infinity,triangle=-1,u=0,v=0;
     if(bin)for(const t of bin) {
       const a=ix[t]*3,b=ix[t+1]*3,c=ix[t+2]*3;
@@ -40,7 +44,14 @@ export class FaceSkin {
       if(z>best){best=z;triangle=t;u=bu;v=bv;}
     }
     if(triangle<0)throw new Error('Animated facial detail outside the jelly surface');
-    const positions=this.body.surface.positions,n=this.body.surface.geometry.attributes.normal.array;
+    out[at]=triangle;out[at+1]=u;out[at+2]=v;
+  }
+  /** Read a located point off the deformed skin.
+   * out contains deformed xyz followed by its unit normal. */
+  project(located:Float64Array,at:number,offset:number,out:Float64Array) {
+    const triangle=located[at],u=located[at+1],v=located[at+2];
+    const ix=this.body.surface.indices,positions=this.body.surface.positions;
+    const n=this.body.surface.geometry.attributes.normal.array;
     out.fill(0);
     for(let k=0;k<3;k++) {
       const id=ix[triangle+k]*3,w=k===0?1-u-v:k===1?u:v;
@@ -48,5 +59,9 @@ export class FaceSkin {
     }
     const length=Math.hypot(out[3],out[4],out[5])||1;
     for(let axis=0;axis<3;axis++){out[axis+3]/=length;out[axis]+=out[axis+3]*offset;}
+  }
+  // out contains deformed xyz followed by its unit normal.
+  sample(x:number,y:number,offset:number,out:Float64Array) {
+    this.locate(x,y,this.scratch);this.project(this.scratch,0,offset,out);
   }
 }

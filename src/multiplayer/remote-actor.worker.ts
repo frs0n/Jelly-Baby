@@ -9,6 +9,6 @@ self.onmessage=({data}:{data:Command})=>{
     if(data.type==='init'){actor=new RemoteActor(data.model);self.postMessage({type:'ready'});return;}
     if(!actor)throw new Error('Remote actor was not initialized');
     const frame=actor.advance(data.dt,data.state,data.reach,data.buffer);
-    self.postMessage({type:'frame',...frame},{transfer:[frame.buffer]});
+    self.postMessage({type:'frame',...frame},{transfer:frame.buffer?[frame.buffer]:[]});
   }catch(error){self.postMessage({type:'error',message:error instanceof Error?error.message:String(error)});}
 };

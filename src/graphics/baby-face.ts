@@ -5,7 +5,11 @@ import { FaceSkin } from './face-skin.ts';
 import { FaceExpression } from './face-expression.ts';
 
 type Feature='eye'|'blush'|'brow'|'mouth'|'tongue';
-type Detail={mesh:THREE.Mesh;rest:Float32Array;cx:number;cy:number;depth:number;kind:Feature};
+// Locating a vertex costs a search through the rest triangles under it, while the
+// expression usually holds it at the same rest coordinate for many frames. Keep
+// the located triangle next to the coordinate it was found for, and re-search only
+// the vertices an expression actually moved.
+type Detail={mesh:THREE.Mesh;rest:Float32Array;cx:number;cy:number;depth:number;kind:Feature;located:Float64Array;source:Float64Array;placed:boolean};
 
 export class BabyFace {
   private readonly details:Detail[]=[];
@@ -30,7 +34,9 @@ export class BabyFace {
       const mesh=new THREE.Mesh(geometry,mat);mesh.frustumCulled=false;
       // Surface ink must render after transmission to avoid a refracted duplicate.
       mat.transparent=true;mesh.renderOrder=2;
-      group.add(mesh);this.details.push({mesh,rest,cx,cy,depth,kind});
+      group.add(mesh);
+      const count=rest.length/3;
+      this.details.push({mesh,rest,cx,cy,depth,kind,located:new Float64Array(count*3),source:new Float64Array(count*2),placed:false});
     };
     const oval=(x:number,y:number,z:number)=>new THREE.SphereGeometry(1,40,24,0,Math.PI*2,0,Math.PI/2).rotateX(Math.PI/2).scale(x,y,z);
     for(const sign of [-1,1]) {
@@ -49,16 +55,19 @@ export class BabyFace {
     add(refinePatch(new THREE.ShapeGeometry(lip,24)),tongue,0,.0368,.00028,'tongue');
   }
   reset() { this.expression.reset(); }
+  /** Returns whether the detail meshes actually moved this frame. */
   update(dt:number) {
     this.expression.update(dt,this.body.grabs.some(grip=>!grip.cosmetic));
     const {sob,laugh,blink,time}=this.expression;
     const version=this.body.surface.geometry.attributes.position.version;
-    if(version===this.surfaceVersion&&blink===this.lastBlink&&sob===this.lastSob&&laugh===this.lastLaugh&&sob===0&&laugh===0)return;
+    if(version===this.surfaceVersion&&blink===this.lastBlink&&sob===this.lastSob&&laugh===this.lastLaugh&&sob===0&&laugh===0)return false;
     this.surfaceVersion=version;this.lastBlink=blink;this.lastSob=sob;this.lastLaugh=laugh;
     const quiver=Math.sin(time*33)*.00022*sob;
     const chuckle=(.5+.5*Math.sin(time*19))*laugh;
-    for(const {mesh,rest,cx,cy,depth,kind} of this.details) {
+    for(const detail of this.details) {
+      const {mesh,rest,cx,cy,depth,kind,located,source}=detail;
       const positions=mesh.geometry.getAttribute('position');
+      const array=positions.array as Float32Array;
       for(let i=0;i<positions.count;i++) {
         let x=rest[i*3],y=rest[i*3+1],z=rest[i*3+2];
         if(kind==='eye') {
@@ -90,10 +99,16 @@ export class BabyFace {
         } else {
           y+=laugh*.00065+sob*.00025;
         }
-        this.skin.sample(x+cx,y+cy,Math.max(.00008,z+depth),this.sample);
-        positions.setXYZ(i,this.sample[0],this.sample[1],this.sample[2]);
+        const sx=x+cx,sy=y+cy,at=i*3,pair=i*2;
+        if(!detail.placed||source[pair]!==sx||source[pair+1]!==sy) {
+          this.skin.locate(sx,sy,located,at);source[pair]=sx;source[pair+1]=sy;
+        }
+        this.skin.project(located,at,Math.max(.00008,z+depth),this.sample);
+        array[at]=this.sample[0];array[at+1]=this.sample[1];array[at+2]=this.sample[2];
       }
+      detail.placed=true;
       positions.needsUpdate=true;mesh.geometry.computeVertexNormals();
     }
+    return true;
   }
 }

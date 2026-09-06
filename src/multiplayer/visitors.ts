@@ -1,3 +1,4 @@
+import { MeshPlayback } from './mesh-playback.ts';
 import * as THREE from 'three/webgpu';
 import { colorJelly } from './jelly-color.ts';
 import { loadBabyModel, parseBabyCage, type BabyModel } from '../physics/baby-cage.ts';
@@ -7,7 +8,7 @@ import type { Grip } from './grabs.ts';
 import type { Reach } from './reaching-hand.ts';
 
 type Options={model?:Promise<BabyModel>;worker?:()=>Worker;fail?:(error:Error)=>void;localGrip?:()=>THREE.Vector3|null};
-type Visitor={group:THREE.Group;meshes:THREE.Mesh[];worker:Worker;ready:boolean;busy:boolean;elapsed:number;frame:ActorFrame|null;recycle?:ArrayBuffer;center:THREE.Vector3;state:Player;samples:{time:number;state:Player}[]};
+type Visitor={group:THREE.Group;meshes:THREE.Mesh[];worker:Worker;ready:boolean;busy:boolean;elapsed:number;frame:ActorFrame|null;recycle?:ArrayBuffer;vertices?:ArrayBuffer;center:THREE.Vector3;state:Player;samples:{time:number;state:Player}[];playback?:MeshPlayback};
 /** Local FEM and face animation with a lightweight remote skin and bounded updates. */
 export class Visitors {
   private template:THREE.Group;
@@ -63,24 +64,14 @@ export class Visitors {
     }
   }
   private apply(v:Visitor,frame:ActorFrame) {
-    let offset=0;
-    v.meshes.forEach((mesh,i)=>{
-      const length=frame.lengths[i],geometry=mesh.geometry;
-      for(const name of ['position','normal']) {
-        const attribute=geometry.getAttribute(name) as THREE.BufferAttribute;
-        attribute.array=new Float32Array(frame.buffer,offset,length);attribute.needsUpdate=true;offset+=length*4;
-      }
-      const b=frame.bounds[i];
-      geometry.boundingBox??=new THREE.Box3();geometry.boundingSphere??=new THREE.Sphere();
-      geometry.boundingBox.min.set(b[0],b[1],b[2]);geometry.boundingBox.max.set(b[3],b[4],b[5]);
-      geometry.boundingSphere.center.set(b[6],b[7],b[8]);geometry.boundingSphere.radius=b[9];
-    });
-    v.recycle=v.frame?.buffer;v.frame=frame;v.center.set(frame.center.x,frame.center.y,frame.center.z);v.group.visible=true;
+    v.playback??=new MeshPlayback(v.meshes);
+    if(frame.buffer){v.playback.accept(frame);v.recycle=v.vertices;v.vertices=frame.buffer;}
+    v.frame=frame;v.center.copy(v.playback.center);v.group.visible=true;
   }
   grabPoint(id:string) {
     if(id===this.self)return this.options.localGrip?.()??null;
-    const v=this.visitors.get(id),p=v?.frame?.gripPoint;
-    return v&&p?new THREE.Vector3(p.x,p.y,p.z).add(v.group.position):null;
+    const v=this.visitors.get(id);
+    return v?.playback?.hasGrip?v.playback.gripPoint.clone().add(v.group.position):null;
   }
   reachFor(id:string):Reach|null {
     if(id===this.self&&this.predicted){const p=this.grabPoint(this.predicted.id);return {hand:this.predicted.grip.hand,target:p?{x:p.x,y:p.y,z:p.z}:this.predicted.grip.target};}
@@ -113,13 +104,17 @@ export class Visitors {
           state.grab={...state.grab,target:{x:THREE.MathUtils.lerp(a.x,b.x,t),y:THREE.MathUtils.lerp(a.y,b.y,t),z:THREE.MathUtils.lerp(a.z,b.z,t)}};
         }
       }
-      if(v.frame)v.group.position.set(state.x-v.frame.root.x,state.y-v.frame.root.y,state.z-v.frame.root.z);
+      // The pose and its grip point share one interpolated root-relative space.
+      // Advancing the network root must never reset on a worker delivery.
+      v.group.position.set(state.x,state.y,state.z);
+      v.playback?.update(dt);if(v.playback)v.center.copy(v.playback.center);
       // Pointer feedback is local; ownership/release still come from authority.
       if(this.predicted?.id===id&&(!state.grab||state.grab.by===this.self))state.grab={...(state.grab??this.predicted.grip),target:{...this.predicted.grip.target}};
       v.elapsed=Math.min(.05,v.elapsed+dt);
-      // Deform/upload at 30 Hz independently of 60/120/144 Hz rendering.
-      // Keep 120 Hz remote solver substeps, with at most one in-flight job per actor.
-      if(!v.ready||v.busy||(v.frame&&v.elapsed+1e-9<1/30))continue;
+      // Give the directly manipulated visitor a 60 Hz budget, everyone else 30 Hz.
+      // Display playback still advances every render frame, including busy frames.
+      const interval=this.predicted?.id===id?1/60:1/30;
+      if(!v.ready||v.busy||(v.frame&&v.elapsed+1e-9<interval))continue;
       v.busy=true;const buffer=v.recycle;v.recycle=undefined;
       v.worker.postMessage({type:'frame',dt:v.elapsed,state,reach:this.reachFor(id),buffer},buffer?[buffer]:[]);v.elapsed=0;
     }

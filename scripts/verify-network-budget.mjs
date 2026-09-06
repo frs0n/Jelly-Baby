@@ -29,6 +29,9 @@ for(const hz of [60,120,144]) {
  visitors.beginPrediction(remote.id,new Vector3(.1,.045,0));visitors.predictGrab(remote.id,new Vector3(.13,.09,0));
  v.busy=false;visitors.update(1/30,0);assert.equal(calls.at(-1).state.grab.by,self.id,'drag predicts before server acknowledgement');
  assert.equal(calls.at(-1).state.grab.target.y,.09);
+ const activeStart=calls.length;
+ for(let i=0;i<hz;i++){v.busy=false;visitors.update(1/hz,0);}
+ assert.ok(calls.length-activeStart<=60&&calls.length-activeStart>=48,'direct manipulation receives 60 Hz budget');
  visitors.clearPrediction();v.busy=false;visitors.update(1/30,0);assert.equal(calls.at(-1).state.grab,null,'release removes speculative constraint');
  visitors.dispose();
 }

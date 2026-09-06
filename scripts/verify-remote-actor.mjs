@@ -18,7 +18,15 @@ actor.advance(1/60,state,null,frame.buffer);assert.equal(actor.body.grabs.length
 state.grab={by:'other',hand:1,anchor:{x:0,y:.055,z:.02},target:{x:.04,y:.12,z:.02},updated:0};
 for(let i=0;i<60;i++)frame=actor.advance(1/60,state,null,frame.buffer);
 assert.ok(frame.gripPoint.y>.075);assert.ok(actor.body.minimumJacobian()>=.12);
-actor.dispose();
+// Once asleep and between expressions, visitors publish no vertex buffer.
+const dragFixture=state.grab;actor.hand.clear();state.grab=null;state.vx=state.vy=state.vz=0;
+actor.body.reset();actor.baby.resetFace();
+frame=actor.advance(0,state,null,frame.buffer);
+assert.ok(frame.buffer);const reusable=frame.buffer;
+for(let i=0;i<20;i++){frame=actor.advance(0,state,null,i===0?reusable:undefined);assert.equal(frame.buffer,undefined,'idle frame does not copy or upload vertices');}
+actor.body.x[0]+=.00001;actor.body.surfaceDirty=true;
+frame=actor.advance(0,state,null);assert.equal(frame.buffer,reusable,'idle worker keeps the spare until it needs vertices again');
+actor.dispose();state.grab=dragFixture;
 // Exercise real worker threads, reusable transfer buffers, and five concurrent visitors.
 const workers=Array.from({length:5},worker);
 async function send(w,message,transfer=[]) {

@@ -17,6 +17,7 @@ import { Playground } from '../multiplayer/playground.ts';
 import { appearanceAbsorption } from '../multiplayer/appearance.ts';
 
 export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
+  const probe=import.meta.env.DEV&&new URLSearchParams(location.search).has('profile')?(await import('./performance-probe.ts')).createProbe():null;
   stage('Starting WebGPU');
   const renderer=await createRenderer(fail);
   document.querySelector('#viewport')!.appendChild(renderer.domElement);
@@ -75,28 +76,35 @@ export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
   const frame=(time:number)=>{
     if(disposed)return;
     try {
+      probe?.begin(Math.max(0,(time-lastTime)/1000));
       const dt=Math.min(.05,Math.max(0,(time-lastTime)/1000));lastTime=time;
       if(document.hidden){physicsClock.reset();return;}
       physicsClock.advance(dt,()=>{
         input.step(PHYS.step);rig.step(PHYS.step);body.step(PHYS.step);input.afterPhysicsStep();rig.afterStep();
       });
+      probe?.mark('physics');
       playground?.update(dt);
+      probe?.mark('visitors');
       if(body.surfaceDirty) {
         if(!body.isFinite())throw new Error('The soft-body simulation produced an invalid state');
         body.updateSurface();
       }
+      probe?.mark('surface');
       baby.update(dt);
+      probe?.mark('face');
       input.update(dt);
       transport.follow();
       optics.update(renderer,body);
       table.mesh.position.x=body.center.x;table.mesh.position.z=body.center.z;
       void transport.update().catch(fail);
+      probe?.mark('optics');
       composite.render();
+      probe?.mark('render');probe?.end();
     }catch(error){fail(error);}
   };
   await renderer.setAnimationLoop(frame);
   const dispose=()=>{
-    if(disposed)return;disposed=true;
+    if(disposed)return;disposed=true;probe?.dispose();
     void renderer.setAnimationLoop(null);input.dispose();sound.dispose();transport.dispose();resizeObserver.disconnect();cancelAnimationFrame(resizeFrame);
     playground?.dispose();composite.dispose();baby.dispose();table.dispose();environment.dispose();optics.dispose();renderer.dispose();
   };

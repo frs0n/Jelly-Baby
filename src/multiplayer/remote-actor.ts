@@ -13,7 +13,7 @@ import { reconcile } from './reconcile.ts';
 import type { Player } from './simulation.ts';
 import type { Point } from './grabs.ts';
 
-export type ActorFrame={buffer:ArrayBuffer;lengths:number[];bounds:number[][];root:Point;center:Point;gripPoint:Point|null;handPoint:Point|null;physicsSteps:number};
+export type ActorFrame={buffer?:ArrayBuffer;lengths:number[];updated:boolean[];bounds:number[][];root:Point;center:Point;gripPoint:Point|null;handPoint:Point|null;physicsSteps:number};
 export class RemoteActor {
   readonly body:SoftBody;
   readonly rig:Locomotion;
@@ -27,15 +27,21 @@ export class RemoteActor {
   private previousY=0;
   private impacts=new ImpactResponse();
   private initialized=false;
+  private spare:ArrayBuffer|undefined;
+  private bounds:number[][]=[];
+  private lengths:number[]=[];
+  private surfaceRevision=-1;
   constructor(model:BabyModel) {
     this.body=new SoftBody(parseBabyCage(model.buffer,model.manifest,true));
     this.rig=new Locomotion(this.body);this.baby=new Baby(this.body);this.hand=new ReachingHand(this.body);
     for(let i=0;i<80;i++){this.rig.step(PHYS.step);this.body.step(PHYS.step);}
     this.body.updateSurface();this.baby.update();this.restY=this.body.center.y;
     this.baby.group.traverse(object=>{if(object instanceof THREE.Mesh)this.meshes.push(object);});
+    this.lengths=this.meshes.map(mesh=>mesh.geometry.attributes.position.array.length);
   }
   advance(dt:number,state:Player,reach:Reach|null,buffer?:ArrayBuffer):ActorFrame {
     const b=this.body;
+    if(buffer)this.spare=buffer;
     if(!this.initialized) {
       const dx=state.x-b.center.x,dz=state.z-b.center.z;
       for(let i=0;i<b.x.length;i+=3){b.x[i]+=dx;b.x[i+1]+=state.y;b.x[i+2]+=dz;b.previous[i]+=dx;b.previous[i+1]+=state.y;b.previous[i+2]+=dz;}
@@ -61,23 +67,26 @@ export class RemoteActor {
     });
     reconcile(b,state,this.restY,0,dt);
     if(b.surfaceDirty)b.updateSurface();
+    const skin=b.surfaceRevision!==this.surfaceRevision;this.surfaceRevision=b.surfaceRevision;
     if(!b.isFinite())throw new Error('Remote soft-body simulation is not finite');
-    this.baby.update(dt);
-    const lengths=this.meshes.map(mesh=>mesh.geometry.attributes.position.array.length);
-    const bytes=lengths.reduce((sum,length)=>sum+length*8,0);
-    const packed=buffer&&buffer.byteLength===bytes?buffer:new ArrayBuffer(bytes);
-    let offset=0;const bounds:number[][]=[];
-    for(const mesh of this.meshes) {
+    const face=this.baby.update(dt);
+    const updated=this.meshes.map(mesh=>mesh===this.baby.mesh?skin:face||!this.bounds.length);
+    const point=(v:THREE.Vector3):Point=>({x:v.x,y:v.y,z:v.z});
+    const frame:ActorFrame={lengths:this.lengths,updated,bounds:this.bounds,root:{x:state.x,y:state.y,z:state.z},center:point(b.center),gripPoint:this.grip?point(this.grip.point):null,handPoint:this.hand.tip?point(this.hand.tip):null,physicsSteps:steps};
+    if(!updated.some(Boolean))return frame;
+    const bytes=this.lengths.reduce((sum,length)=>sum+length*8,0);
+    const packed=this.spare??new ArrayBuffer(bytes);this.spare=undefined;
+    let offset=0;
+    this.meshes.forEach((mesh,i)=>{
       const geometry=mesh.geometry,p=geometry.attributes.position.array,n=geometry.attributes.normal.array;
       new Float32Array(packed,offset,p.length).set(p);offset+=p.length*4;
       new Float32Array(packed,offset,n.length).set(n);offset+=n.length*4;
-      // Surface embedding already computes the large skin bounds in one pass.
+      if(!updated[i])return;
       if(mesh!==this.baby.mesh){geometry.computeBoundingBox();geometry.computeBoundingSphere();}
       const box=geometry.boundingBox!,sphere=geometry.boundingSphere!;
-      bounds.push([...box.min.toArray(),...box.max.toArray(),...sphere.center.toArray(),sphere.radius]);
-    }
-    const point=(v:THREE.Vector3):Point=>({x:v.x,y:v.y,z:v.z});
-    return {buffer:packed,lengths,bounds,root:{x:state.x,y:state.y,z:state.z},center:point(b.center),gripPoint:this.grip?point(this.grip.point):null,handPoint:this.hand.tip?point(this.hand.tip):null,physicsSteps:steps};
+      this.bounds[i]=[...box.min.toArray(),...box.max.toArray(),...sphere.center.toArray(),sphere.radius];
+    });
+    frame.buffer=packed;return frame;
   }
   dispose(){this.hand.clear();this.baby.dispose();this.body.cage.opticalSurface.geometry.dispose();}
 }
