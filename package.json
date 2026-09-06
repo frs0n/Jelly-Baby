@@ -10,6 +10,7 @@
     "build:model": "node scripts/build-model.mjs",
     "build:kernel": "node scripts/build-kernel.mjs",
     "test:physics": "node --experimental-strip-types scripts/verify-physics.mjs",
+    "test:multitouch": "node --experimental-strip-types scripts/verify-multitouch.mjs",
     "test:performance": "node --experimental-strip-types scripts/verify-performance.mjs",
     "benchmark": "node --experimental-strip-types scripts/benchmark.mjs",
     "build": "tsc && vite build",

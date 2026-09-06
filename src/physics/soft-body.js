@@ -22,7 +22,7 @@ export class SoftBody {
     this.cage=cage;this.x=cage.pos.slice();this.rest=cage.pos.slice();
     this.previous=this.x.slice();this.candidate=this.x.slice();this.velocity=new Float64Array(this.x.length);
     this.mass=new Float64Array(this.x.length/3);this.inverseMass=new Float64Array(this.mass.length);
-    this.contact=new Float64Array(this.mass.length);this.grab=null;
+    this.contact=new Float64Array(this.mass.length);this.grabs=[];
     this.elements=[];this.edges=[];this.gradient=new Float64Array(12);this.hydroGradient=new Float64Array(12);this.F=new Float64Array(9);this.cofactors=new Float64Array(9);
     this.nodalF=new Float64Array(this.mass.length*9);this.nodalVolume=new Float64Array(this.mass.length);
     this.center=new Vector3();this.surface=cage.surface;
@@ -117,8 +117,13 @@ export class SoftBody {
     const next=Math.max(0,e.lambdaB-(J-.25)/denominator),delta=next-e.lambdaB;e.lambdaB=next;
     for(let v=0;v<4;v++)for(let k=0;k<3;k++)this.x[e.offsets[v]+k]+=this.inverseMass[e.ids[v]]*delta*out[v*3+k];
   }
+  // Preserve the single-grab API for callers that only need one grip.
+  get grab(){return this.grabs[0]??null;}
+  set grab(value){this.grabs=value?[value]:[];}
   solveGrab(h) {
-    const grab=this.grab;if(!grab)return;
+    for(const grab of this.grabs)this.solveGrabConstraint(grab,h);
+  }
+  solveGrabConstraint(grab,h) {
     const p=grab.point;p.set(0,0,0);let denominator=0;
     for(const [id,w] of grab.weights){p.x+=this.x[id*3]*w;p.y+=this.x[id*3+1]*w;p.z+=this.x[id*3+2]*w;denominator+=this.inverseMass[id]*w*w;}
     const alpha=1/(90*h*h);denominator+=alpha;
@@ -215,9 +220,9 @@ export class SoftBody {
     this.kernel.step(h,PHYS);
     const meta=this.kernel.meta;this.grounded=meta[0]!==0;this.lastMinJacobian=meta[1];this.limitedSteps+=meta[2];this.stepFraction=meta[14];
     this.center.set(meta[3],meta[4],meta[5]);
-    if(this.grab) {
-      const point=this.grab.point;point.set(0,0,0);
-      for(const [id,w] of this.grab.weights){point.x+=this.x[id*3]*w;point.y+=this.x[id*3+1]*w;point.z+=this.x[id*3+2]*w;}
+    for(const grab of this.grabs) {
+      const point=grab.point;point.set(0,0,0);
+      for(const [id,w] of grab.weights){point.x+=this.x[id*3]*w;point.y+=this.x[id*3+1]*w;point.z+=this.x[id*3+2]*w;}
     }
     const rms=Math.sqrt(2*meta[6]/this.totalMass);
     this.quietTime=this.canSleep&&!this.grab&&this.grounded&&this.stepFraction>=.999&&rms<.005?this.quietTime+h:0;
@@ -235,7 +240,7 @@ export class SoftBody {
     for(const c of this.contacts){c.normal=0;c.incoming=0;for(const [id,w] of c.weights)c.incoming+=v[id*3+1]*w;}
     for(let i=0;i<x.length;i++)x[i]+=v[i]*h;
     for(const e of this.elements)e.lambdaD=e.lambdaH=e.lambdaB=0;
-    if(this.grab)this.grab.lambda.fill(0);
+    for(const grab of this.grabs)grab.lambda.fill(0);
     for(let iteration=0;iteration<PHYS.iterations;iteration++) {
       for(let n=0;n<this.elements.length;n++) {
         const e=this.elements[(iteration&1)?this.elements.length-1-n:n];this.solveElastic(e,h);this.solveBarrier(e);

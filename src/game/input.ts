@@ -4,7 +4,20 @@ import type { SoftBody } from '../physics/soft-body.js';
 import type { Locomotion } from './locomotion.ts';
 import type { JellySound } from './sound.ts';
 import { surfaceGrab, projectGrabTarget, advanceGrabTarget } from '../physics/grab.ts';
+import { MAX_GRABS } from '../physics/soft-body-kernel.js';
 import { SurfaceBVH } from '../graphics/refractive-light.js';
+
+type PointerGrab={
+  grab:NonNullable<ReturnType<typeof surfaceGrab>>;
+  pointerType:string;
+  plane:THREE.Plane;
+  rawTarget:THREE.Vector3;
+  releasePending:boolean;
+  releaseStepsRemaining:number;
+  physicsSteps:number;
+  commandVersion:number;
+  consumedVersion:number;
+};
 
 export class Input {
   readonly controls:OrbitControls;
@@ -15,17 +28,10 @@ export class Input {
   private joystickZ=0;
   private joystickElement:HTMLButtonElement|null=null;
   private joystickKnob:HTMLElement|null=null;
-  private activePointer:number|null=null;
-  private releasePending=false;
-  private releaseStepsRemaining=0;
-  private grabPhysicsSteps=0;
-  private commandVersion=0;
-  private consumedVersion=0;
+  private grabs=new Map<number,PointerGrab>();
   private raycaster=new THREE.Raycaster();
   private grabBVH:SurfaceBVH;
   private pointer=new THREE.Vector2();
-  private plane=new THREE.Plane();
-  private rawTarget=new THREE.Vector3();
   private temp=new THREE.Vector3();
   private follow=new THREE.Vector3();
   private abort=new AbortController();
@@ -52,7 +58,7 @@ export class Input {
     canvas.addEventListener('pointermove',this.pointerMove,{capture:true,passive:false,signal});
     // Window-level release is deliberate. Pointer capture should deliver these
     // through the canvas, but this closes the failure mode where a browser/OS
-    // transition loses that path and leaves activePointer wedged forever.
+    // transition loses that path and leaves a grip wedged forever.
     window.addEventListener('pointerup',this.end,{capture:true,signal});
     window.addEventListener('pointercancel',this.end,{capture:true,signal});
     window.addEventListener('pointerup',this.releaseJoystick,{capture:true,signal});
@@ -119,19 +125,21 @@ export class Input {
     this.pointer.set((e.clientX-rect.left)/rect.width*2-1,-(e.clientY-rect.top)/rect.height*2+1);
     this.camera.updateMatrixWorld();this.raycaster.setFromCamera(this.pointer,this.camera);
   }
-  private captureDragTarget(e:PointerEvent) {
+  private captureDragTarget(e:PointerEvent,state:PointerGrab) {
     // The final coalesced sample is the newest physical pointer position. Using
     // it also makes very fast high-polling-rate mouse motion deterministic.
     const samples=e.getCoalescedEvents?.()??[];
     const sample=samples.length?samples[samples.length-1]:e;
     this.eventRay(sample);
-    if(projectGrabTarget(this.raycaster.ray,this.plane,this.temp)) {
-      this.rawTarget.copy(this.temp);this.commandVersion++;return true;
+    if(projectGrabTarget(this.raycaster.ray,state.plane,this.temp)) {
+      state.rawTarget.copy(this.temp);state.commandVersion++;return true;
     }
     return false;
   }
   private begin=(e:PointerEvent)=>{
-    if(e.button!==0||this.activePointer!==null||this.body.grab||this.releasePending)return;
+    if(e.button!==0||this.grabs.has(e.pointerId)||this.body.grabs.length>=MAX_GRABS)return;
+    // Only touch can add simultaneous grips; desktop mouse/pen keep one grip.
+    if(this.body.grab&&(e.pointerType!=='touch'||[...this.grabs.values()].some(state=>state.pointerType!=='touch')))return;
     this.eventRay(e);
     // Exact picking against the same full-resolution deformed surface that is
     // rendered, but through its refittable BVH instead of Three's O(144k)
@@ -145,22 +153,24 @@ export class Input {
     void this.sound.unlock().catch(()=>{});
     e.preventDefault();e.stopImmediatePropagation();
     const grab=surfaceGrab(this.body,face,point);if(!grab)return;
-    this.body.grab=grab;this.body.wake();
-    this.activePointer=e.pointerId;this.releasePending=false;this.releaseStepsRemaining=0;
-    this.grabPhysicsSteps=0;this.commandVersion=0;this.consumedVersion=0;
+    this.body.grabs.push(grab);this.body.wake();
+    this.camera.getWorldDirection(this.temp);
+    this.grabs.set(e.pointerId,{
+      grab,pointerType:e.pointerType,
+      plane:new THREE.Plane().setFromNormalAndCoplanarPoint(this.temp,point),rawTarget:point.clone(),
+      releasePending:false,releaseStepsRemaining:0,physicsSteps:0,commandVersion:0,consumedVersion:0,
+    });
     this.controls.enabled=false;
     this.canvas.setPointerCapture(e.pointerId);this.canvas.classList.add('grabbing');
-    this.camera.getWorldDirection(this.temp);this.plane.setFromNormalAndCoplanarPoint(this.temp,point);
-    this.rawTarget.copy(point);
   };
   private pointerMove=(e:PointerEvent)=>{
-    if(this.activePointer!==null&&e.pointerId!==this.activePointer)return;
-    if(this.activePointer!==null&&e.pointerType==='mouse'&&(e.buttons&1)===0) {
-      // Recover even if pointerup/lostpointercapture was swallowed externally.
-      this.end(e);return;
-    }
-    if(this.activePointer!==null&&this.body.grab) {
-      e.preventDefault();e.stopImmediatePropagation();this.captureDragTarget(e);
+    const state=this.grabs.get(e.pointerId);
+    if(state&&!state.releasePending) {
+      if(e.pointerType==='mouse'&&(e.buttons&1)===0) {
+        // Recover even if pointerup/lostpointercapture was swallowed externally.
+        this.end(e);return;
+      }
+      e.preventDefault();e.stopImmediatePropagation();this.captureDragTarget(e,state);
     } else if(!this.body.grab&&e.pointerType==='mouse') {
       this.eventRay(e);
       // Hover is only a cursor hint. Pointer-down resolves the exact visible
@@ -168,26 +178,34 @@ export class Input {
       this.canvas.style.cursor=this.mesh.geometry.boundingBox&&this.raycaster.ray.intersectsBox(this.mesh.geometry.boundingBox)?'grab':'default';
     }
   };
-  private end=(e?:PointerEvent)=>{
-    if(this.activePointer===null||(e&&e.pointerId!==this.activePointer))return;
+  private end=(e:PointerEvent)=>{
+    const state=this.grabs.get(e.pointerId);
+    if(!state||state.releasePending)return;
     // pointerup itself may be the only event carrying an abrupt drag endpoint.
-    if(e?.type==='pointerup'&&this.body.grab)this.captureDragTarget(e);
-    e?.preventDefault();e?.stopImmediatePropagation();
-    const id=this.activePointer;this.activePointer=null;this.canvas.classList.remove('grabbing');
-    if(this.canvas.hasPointerCapture(id))this.canvas.releasePointerCapture(id);
-    if(!this.body.grab){this.finishRelease();return;}
-    // Do not destroy the grab in the DOM event. If down/move/up all happened
-    // between render ticks, doing so means the physics solver sees nothing.
-    // One normal drag gets one final 240 Hz sample; a zero-step flick gets two.
-    this.releasePending=true;
-    this.releaseStepsRemaining=Math.max(this.releaseStepsRemaining,this.grabPhysicsSteps===0?2:1);
+    if(e.type==='pointerup')this.captureDragTarget(e,state);
+    e.preventDefault();e.stopImmediatePropagation();
+    // Mark released before releasing capture, which may itself dispatch an event.
+    state.releasePending=true;
+    state.releaseStepsRemaining=state.physicsSteps===0?2:1;
+    if(this.canvas.hasPointerCapture(e.pointerId))this.canvas.releasePointerCapture(e.pointerId);
+    this.syncGrabControls();
+    // Retain each released grip until physics consumes its final target sample.
   };
-  private finishRelease=()=>{
-    const id=this.activePointer;
-    if(id!==null&&this.canvas.hasPointerCapture(id))this.canvas.releasePointerCapture(id);
-    this.activePointer=null;this.releasePending=false;this.releaseStepsRemaining=0;
-    this.grabPhysicsSteps=0;this.body.grab=null;this.body.wake();this.controls.enabled=true;
-    this.canvas.classList.remove('grabbing');
+  private syncGrabControls() {
+    this.controls.enabled=this.body.grabs.length===0;
+    this.canvas.classList.toggle('grabbing',[...this.grabs.values()].some(state=>!state.releasePending));
+  }
+  private finishRelease=(id?:number)=>{
+    const ids=id===undefined?[...this.grabs.keys()]:[id];
+    for(const pointerId of ids) {
+      const state=this.grabs.get(pointerId);if(!state)continue;
+      this.grabs.delete(pointerId);
+      const index=this.body.grabs.indexOf(state.grab);
+      if(index!==-1)this.body.grabs.splice(index,1);
+      if(this.canvas.hasPointerCapture(pointerId))this.canvas.releasePointerCapture(pointerId);
+    }
+    if(id===undefined)this.body.grab=null;
+    this.body.wake();this.syncGrabControls();
   };
   private keyDown=(e:KeyboardEvent)=>{
     if((e.target as HTMLElement)?.closest('input,textarea,select,[contenteditable="true"]'))return;
@@ -208,7 +226,6 @@ export class Input {
       this.joystickKnob?.style.setProperty('--joystick-y','0px');joystick?.classList.remove('held');
       if(joystick?.hasPointerCapture(id))joystick.releasePointerCapture(id);
     }
-    if(this.activePointer!==null&&this.canvas.hasPointerCapture(this.activePointer))this.canvas.releasePointerCapture(this.activePointer);
     this.finishRelease();this.rig.move.set(0,0,0);
     document.querySelectorAll('.held').forEach(el=>el.classList.remove('held'));
   };
@@ -229,24 +246,24 @@ export class Input {
       this.rig.move.set(-this.temp.z*x+this.temp.x*z,0,this.temp.x*x+this.temp.z*z);
       if(this.rig.move.lengthSq()>1)this.rig.move.normalize();
     } else this.rig.move.set(0,0,0);
-    const grab=this.body.grab;
-    if(grab) {
-      advanceGrabTarget(grab.target,this.rawTarget,h,grab.point);
-      this.consumedVersion=this.commandVersion;this.grabPhysicsSteps++;
+    for(const state of this.grabs.values()) {
+      const grab=state.grab;
+      advanceGrabTarget(grab.target,state.rawTarget,h,grab.point);
+      state.consumedVersion=state.commandVersion;state.physicsSteps++;
     }
   }
   /** Called immediately after body.step() for the same fixed substep. */
   afterPhysicsStep() {
-    const grab=this.body.grab;if(!grab)return;
-    if(this.releasePending&&this.consumedVersion===this.commandVersion) {
-      this.releaseStepsRemaining--;
-      if(this.releaseStepsRemaining<=0)this.finishRelease();
+    for(const [id,state] of this.grabs) {
+      if(state.releasePending&&state.consumedVersion===state.commandVersion) {
+        state.releaseStepsRemaining--;
+        if(state.releaseStepsRemaining<=0)this.finishRelease(id);
+      }
     }
   }
   update(dt:number) {
-    // State invariant: a missing grab must never leave pointer/orbit state wedged.
-    // This is redundant with pointerup/cancel/lost-capture on purpose.
-    if(!this.body.grab&&(this.activePointer!==null||this.releasePending||!this.controls.enabled))this.finishRelease();
+    // External resets must never leave pointer capture or orbit state wedged.
+    for(const [id,state] of this.grabs)if(!this.body.grabs.includes(state.grab))this.finishRelease(id);
     if(this.body.grab)return; // Freeze both orbit and translation for the entire grab.
     const target=this.temp.copy(this.body.center);target.y=Math.max(.025,target.y);
     this.follow.lerp(target,1-Math.exp(-4.5*dt));

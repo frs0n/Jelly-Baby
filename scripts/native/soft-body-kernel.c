@@ -5,7 +5,9 @@
 // arithmetic in tight linear-memory loops so interaction no longer competes
 // with tens of thousands of JS method/object traversals per frame.
 
-static uint32_t heap = 65536;
+// Allocate above the linker-owned stack/data region when rebuilding the kernel.
+extern unsigned char __heap_base;
+static uint32_t heap;
 static uint32_t node_count, element_count, edge_count, contact_count, surface_count;
 static uint32_t x_p, previous_p, candidate_p, velocity_p, mass_p, inverse_mass_p, contact_node_p;
 static uint32_t element_ids_p, element_volume_p, element_gradients_p, inverse_rest_det_p;
@@ -26,6 +28,7 @@ static inline double dmin(double a,double b) { return a<b?a:b; }
 static inline double dmax(double a,double b) { return a>b?a:b; }
 
 __attribute__((export_name("alloc"))) uint32_t alloc_mem(uint32_t bytes) {
+  if(!heap)heap=(uint32_t)(uintptr_t)&__heap_base;
   uint32_t p=(heap+15u)&~15u;heap=p+bytes;return p;
 }
 
@@ -101,8 +104,9 @@ static inline void solve_element(uint32_t e,double h,double shear,double bulk,do
   for(uint32_t v=0;v<4;v++){uint32_t id=ids[io+v],at=id*3,j=v*3;double wm=inverse_mass[id]*delta;for(uint32_t k=0;k<3;k++)x[at+k]+=wm*out[j+k];}
 }
 
-static inline void solve_grab(uint32_t grab_count,double h,double max_force,double *x,const double *inverse_mass) {
-  if(!grab_count)return;const uint32_t *ids=u32(grab_ids_p);const double *weights=d64(grab_weights_p),*target=d64(grab_target_p);double *lambda=d64(grab_lambda_p);
+static inline void solve_grab(uint32_t slot,double h,double max_force,double *x,const double *inverse_mass) {
+  const uint32_t *record=u32(grab_ids_p)+slot*17,*ids=record+1;uint32_t grab_count=record[0];
+  const double *weights=d64(grab_weights_p)+slot*16,*target=d64(grab_target_p)+slot*3;double *lambda=d64(grab_lambda_p)+slot*3;
   double p[3]={0,0,0},denominator=0;
   for(uint32_t q=0;q<grab_count;q++){uint32_t id=ids[q],at=id*3;double w=weights[q];p[0]+=x[at]*w;p[1]+=x[at+1]*w;p[2]+=x[at+2]*w;denominator+=inverse_mass[id]*w*w;}
   double alpha=1/(90*h*h);denominator+=alpha;
@@ -184,10 +188,10 @@ __attribute__((export_name("step"))) void step(double h,uint32_t grab_count,doub
   double *cn=d64(contact_normal_p),*ci=d64(contact_incoming_p),*cw=d64(contact_weights_p);uint32_t *cids=u32(contact_ids_p);double *meta=d64(meta_p);
   for(uint32_t i=0;i<node_count*3;i++){previous[i]=x[i];node_contact[i/3]=0;velocity[i]*=air;}for(uint32_t i=1;i<node_count*3;i+=3)velocity[i]-=gravity*h;
   for(uint32_t c=0;c<contact_count;c++){cn[c]=0;ci[c]=0;uint32_t o=c*4;for(uint32_t k=0;k<4;k++){uint32_t id=cids[o+k];ci[c]+=velocity[id*3+1]*cw[o+k];}}
-  for(uint32_t i=0;i<node_count*3;i++)x[i]+=velocity[i]*h;for(uint32_t e=0;e<element_count;e++)lambdaD[e]=lambdaH[e]=lambdaB[e]=0;for(uint32_t k=0;k<3;k++)d64(grab_lambda_p)[k]=0;
+  for(uint32_t i=0;i<node_count*3;i++)x[i]+=velocity[i]*h;for(uint32_t e=0;e<element_count;e++)lambdaD[e]=lambdaH[e]=lambdaB[e]=0;for(uint32_t k=0;k<grab_count*3;k++)d64(grab_lambda_p)[k]=0;
   for(uint32_t iteration=0;iteration<iterations;iteration++) {
     if(iteration&1){for(uint32_t n=element_count;n-->0;)solve_element(n,h,shear,bulk,x,inverse_mass,ids,volume,grad,lambdaD,lambdaH,lambdaB);}else{for(uint32_t n=0;n<element_count;n++)solve_element(n,h,shear,bulk,x,inverse_mass,ids,volume,grad,lambdaD,lambdaH,lambdaB);}
-    solve_grab(grab_count,h,max_grab_force,x,inverse_mass);solve_contacts(floor,x,inverse_mass,node_contact);
+    for(uint32_t g=0;g<grab_count;g++)solve_grab(g,h,max_grab_force,x,inverse_mass);solve_contacts(floor,x,inverse_mass,node_contact);
   }
   uint32_t grounded=0;double *denom=d64(contact_denominator_p);
   for(uint32_t c=0;c<contact_count;c++)if(cn[c]>0){grounded=1;double dx=0,dz=0;uint32_t o=c*4;for(uint32_t k=0;k<4;k++){uint32_t id=cids[o+k];dx+=(x[id*3]-previous[id*3])*cw[o+k];dz+=(x[id*3+2]-previous[id*3+2])*cw[o+k];}double tangent=dsqrt(dx*dx+dz*dz),friction=tangent<static_friction*cn[c]?1:dmin(1,dynamic_friction*cn[c]/(tangent+1e-20));for(uint32_t k=0;k<4;k++){uint32_t id=cids[o+k];double s=inverse_mass[id]*cw[o+k]*friction/denom[c];x[id*3]-=dx*s;x[id*3+2]-=dz*s;}}
