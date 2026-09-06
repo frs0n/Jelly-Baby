@@ -5,8 +5,8 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath, URL } from 'node:url';
 const mf=new Miniflare(convertV4MiniflareOptions({workers:[{name:"jelly-baby-test",modules:true,scriptPath:fileURLToPath(new URL('../work/worker/index.js',import.meta.url)),compatibilityDate:'2026-09-06',compatibilityFlags:['nodejs_compat'],durableObjects:{ROOMS:{className:'JellyRoom',useSQLite:true},MATCHMAKER:{className:'Matchmaker',useSQLite:true}}}]}));
 const sockets=[];
-async function seat(fingerprint='a'.repeat(64),exclude='') {
- const response=await mf.dispatchFetch(`https://example.com/api/join?exclude=${exclude}`,{method:'POST',headers:{'X-Jelly-Fingerprint':fingerprint,'CF-Connecting-IP':'203.0.113.7'}});
+async function seat(fingerprint='a'.repeat(64),exclude='',ip='203.0.113.7') {
+ const response=await mf.dispatchFetch(`https://example.com/api/join?exclude=${exclude}`,{method:'POST',headers:{'X-Jelly-Fingerprint':fingerprint,'CF-Connecting-IP':ip}});
  assert.equal(response.status,200,await response.clone().text());return response.json();
 }
 async function connect(ticket) {
@@ -17,7 +17,7 @@ async function connect(ticket) {
 }
 async function until(check,timeout=3000){const start=Date.now();while(!check()){assert.ok(Date.now()-start<timeout,'timed out waiting for room state');await sleep(15);}}
 try {
- const seats=await Promise.all(Array.from({length:7},(_,i)=>seat(i.toString(16).repeat(64))));
+ const seats=await Promise.all(Array.from({length:7},(_,i)=>seat(i.toString(16).repeat(64),'',i?'203.0.113.'+(7+i):'203.0.113.7')));
  assert.equal(new Set(seats.slice(0,6).map(s=>s.room)).size,1,'six concurrent arrivals share a table');assert.notEqual(seats[6].room,seats[0].room,'seventh arrival gets another table');
  const clients=await Promise.all(seats.slice(0,6).map(connect));const a=clients[0],b=clients[1];
  await until(()=>a.states.at(-1).players.length===6&&b.states.at(-1).players.length===6);
@@ -49,5 +49,8 @@ try {
  const closed=new Promise(resolve=>b.ws.addEventListener('close',resolve,{once:true}));b.ws.send(JSON.stringify({type:'chat',text:'no chat'}));await closed;
  const cross=await mf.dispatchFetch('https://example.com/api/join',{method:'POST',headers:{Origin:'https://bad.example','X-Jelly-Fingerprint':'f'.repeat(64)}});assert.equal(cross.status,403);
  const invalid=await mf.dispatchFetch('https://example.com/api/join',{method:'POST'});assert.equal(invalid.status,400);
- console.log('PASS: concurrent matchmaking, capacity, websocket broadcast, movement/jump/dash, remote drag/lift/release and self-drag, leave/reuse, room switching, ticket replay, deterministic private palettes, no chat, origin validation');
+ const flood=await Promise.all(Array.from({length:100},(_,i)=>mf.dispatchFetch('https://example.com/api/join',{method:'POST',headers:{'X-Jelly-Fingerprint':i.toString(16).padStart(2,'0').repeat(32),'CF-Connecting-IP':'198.51.100.42'}})));
+ assert.equal(flood.filter(response=>response.status===200).length,8,'one IP can reserve at most eight seats across all rooms');
+ assert.ok(flood.every(response=>response.status===200||response.status===429),'flooded joins are rejected without creating more rooms');
+ console.log('PASS: concurrent matchmaking, capacity, websocket broadcast, movement/jump/dash, remote drag/lift/release and self-drag, leave/reuse, room switching, ticket replay, deterministic private palettes, no chat, origin validation, per-identity/IP connection caps and join flood protection');
 } finally {for(const ws of sockets)try{ws.close();}catch{/* already closed */}await mf.dispose();}
