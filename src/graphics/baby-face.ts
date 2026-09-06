@@ -56,8 +56,8 @@ export class BabyFace {
   }
   reset() { this.expression.reset(); }
   /** Returns whether the detail meshes actually moved this frame. */
-  update(dt:number) {
-    this.expression.update(dt,this.body.grabs.some(grip=>!grip.cosmetic));
+  update(dt:number,playing=false) {
+    this.expression.update(dt,this.body.grabs.some(grip=>!grip.cosmetic),playing);
     const {sob,laugh,blink,time}=this.expression;
     const version=this.body.surface.geometry.attributes.position.version;
     if(version===this.surfaceVersion&&blink===this.lastBlink&&sob===this.lastSob&&laugh===this.lastLaugh&&sob===0&&laugh===0)return false;

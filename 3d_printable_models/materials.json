@@ -1,0 +1,34 @@
+{
+  "source_game_material": {
+    "body": {
+      "surface": "#eaffd4",
+      "transmission": 1.0,
+      "roughness": 0.085,
+      "ior": 1.35,
+      "dispersion": 0.025,
+      "thickness_m": 0.035,
+      "attenuation_distance_m": 0.035,
+      "absorption_per_m": [
+        48,
+        3.2,
+        85
+      ],
+      "clearcoat": 0.42,
+      "clearcoat_roughness": 0.05
+    },
+    "eyes": "#142905",
+    "brows_and_mouth": "#254508",
+    "tongue": "#b5d641",
+    "blush": {
+      "color": "#edab4f",
+      "opacity": 0.3
+    }
+  },
+  "print_display_colors": {
+    "body": "#68a33a",
+    "eyes": "#142905",
+    "brows_and_mouth": "#254508",
+    "tongue": "#b5d641",
+    "blush": "#90a540"
+  }
+}

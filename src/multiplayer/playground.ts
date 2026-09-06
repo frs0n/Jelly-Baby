@@ -67,7 +67,10 @@ export class Playground {
     }
     const p=this.client.players.find(p=>p.id===this.client.id);
     if(p) {
-      reconcile(this.body,p,this.floorCenter,this.client.snapshotAge,dt);
+      // A facility owns the body's motion locally while the server only sees a
+      // standing player. Correcting to authority mid-ride would fight the swing
+      // or trampoline every frame; drift is blended away once the ride ends.
+      if(!this.input.bodyControlled())reconcile(this.body,p,this.floorCenter,this.client.snapshotAge,dt);
       this.impacts.update(this.body,this.input.rig,p);
 
     }else this.input.rig.move.set(0,0,0);

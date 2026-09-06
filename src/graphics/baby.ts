@@ -40,7 +40,7 @@ export class Baby {
     );
   }
   setAppearance(palette:Appearance) {colorJelly(this.jellyMaterial,palette,this.body.center);}
-  update(dt=0) { return this.face.update(dt); }
+  update(dt=0,playing=false) { return this.face.update(dt,playing); }
   resetFace() { this.face.reset(); }
   dispose() {
     this.group.traverse(object=>{

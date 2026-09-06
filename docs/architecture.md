@@ -1,0 +1,134 @@
+# Architecture and runtime
+
+Jelly Baby is a small real-time system with a strict separation between the
+simulation, the visible surface, the optical calculations, and the presentation
+shell. The browser runs one WebGPU renderer and one fixed-rate gameplay loop;
+the only worker is the asynchronous optical-transport worker.
+
+## Module boundaries
+
+| Area | Primary modules | Responsibility |
+| --- | --- | --- |
+| Browser shell | `src/main.ts`, `src/style.css`, `index.html` | Create the loading/error UI, expose controls, load the runtime, and style the page. |
+| Runtime orchestration | `src/game/runtime.ts` | Construct subsystems, connect callbacks, perform warmup, run the frame order, and dispose resources. |
+| Physics | `src/physics/*`, `src/game/fixed-step.ts`, `src/game/locomotion.ts` | Advance the soft body, contact, grabbing, posture, jumping, and fixed-rate time. |
+| Character rendering | `src/graphics/baby.ts`, `baby-face.ts`, `face-skin.ts`, `face-expression.ts` | Render the body, attach the face to the deformed skin, and animate expression. |
+| Scene rendering | `renderer.ts`, `environment.ts`, `studio-light.ts`, `table.ts`, `composite.ts` | Configure WebGPU, load and edit the HDR lighting, draw the table, and apply the final image pipeline. |
+| Light transport | `refractive-light.js`, `transport.ts`, `transport.worker.ts` | Produce the GPU caustic field and asynchronous thickness/shadow fields. |
+| Facilities | `facilities.ts`, `swing-*`, `trampoline-*`, `facility-shadows.ts` | Select and simulate interactive set pieces while sharing controls and shadow infrastructure. |
+| Input and sound | `input.ts`, `sound.ts`, `facility-sound.ts`, `flavor-picker.ts` | Translate pointer, keyboard, and touch input into simulation commands and generate procedural audio. |
+
+The runtime is intentionally not a second home for subsystem logic. It wires
+objects together and owns their lifetime; behavior belongs beside the data it
+operates on.
+
+## Startup sequence
+
+`src/main.ts` writes the static interface immediately. It then dynamically
+imports the runtime and passes two callbacks into `startGame`: a stage reporter
+for the loading message and a terminal failure handler. Window-level `error`
+and `unhandledrejection` listeners feed the same handler, so a failure outside a
+local `try` block still reaches the visible error card.
+
+`startGame` performs the following work in order:
+
+1. Create and initialize the WebGPU renderer.
+2. Append its canvas to `#viewport` and construct `JellySound` early so the
+   first user gesture can unlock Web Audio while the rest of the scene loads.
+3. Create the scene, camera, environment, soft body, baby, optical field, table,
+   composite pipeline, locomotion rig, facility manager, flavor picker, input,
+   and optical worker.
+4. Attach reset, sound, facility, resize, and failure callbacks.
+5. Settle the body for 80 fixed steps before showing the first frame. This lets
+   contact and posture establish without exposing the startup pose.
+6. Update the surface, face, facility shadow field, caustics, and worker-backed
+   transport; compile the scene asynchronously; render once; and wait for
+   `queue.onSubmittedWorkDone()` before declaring startup complete.
+7. Start the renderer animation loop and hide the loading card.
+
+The first-frame fence matters: compilation or submission errors must not be
+mistaken for a successful boot merely because a canvas exists.
+
+## Per-frame order
+
+The animation callback clamps wall-clock `dt` to 50 ms. A hidden tab resets the
+fixed-step accumulator and does not simulate or render a stale frame. For a
+visible frame, the order is:
+
+1. `FixedStepper.advance` runs up to 12 substeps at `PHYS.step` (240 Hz).
+2. Each substep processes `Input.step`, every facility's `step`, and either the
+   active facility or normal `Locomotion.step`.
+3. `SoftBody.step` solves the body. `Facilities.afterStep` handles post-solver
+   facility collisions, then `Input.afterPhysicsStep` consumes released grab
+   samples. Normal locomotion receives its `afterStep` contact callbacks when a
+   facility does not own the body.
+4. If the body became dirty, the runtime checks finiteness and updates the
+   full-resolution surface.
+5. Facility meshes, facial expression, and the cached facility shadow field are
+   updated.
+6. Input updates camera follow and orbit state; sound updates its listener;
+   optical transport follows the last traced body position; and the optical
+   field/table coordinates are refreshed.
+7. The worker is offered a transport update if its single-request and 30 Hz
+   limits allow it, then the composite pipeline renders the frame.
+
+This ordering is deliberate. Physics must see input before it runs, picking and
+face attachment must see the same surface that rendering sees, and the optical
+field must receive the post-physics body rather than a one-frame-old pose.
+
+## Reset and lifetime
+
+Reset is shared by the reset button and `R`:
+
+- stop facility voices and reset both facility simulations;
+- clear pointers and recenter the locomotion rig;
+- restore the soft body and face expression;
+- reset the fixed-step accumulator.
+
+The normal disposal path stops the animation loop, removes input listeners,
+terminates the transport worker, disconnects the resize observer, disposes the
+facility manager, shadow field, flavor picker, composite pipeline, character,
+table, environment, optical targets, and renderer. `pagehide` triggers disposal
+unless the page is being persisted, and Vite HMR uses the same cleanup path.
+
+Fatal startup or runtime errors stop rendering and expose the existing loading
+card as a diagnostic panel. The panel includes the current stage, the viewport,
+DPR, user agent, and the error message; it also offers a full-page retry.
+
+## Camera and viewport policy
+
+`OrbitControls` orbits around the mass center, cannot pan, damps rotation, and
+keeps the distance in the range `.135`–`.42` metres during ordinary play. A
+grab freezes both orbit and body-follow movement. Facilities can raise the
+minimum camera distance while active.
+
+`resizeView` is called through a `ResizeObserver` whose events are coalesced to
+one animation frame. It uses the project-wide drawing-buffer policy:
+
+- maximum of 4,000,000 physical pixels;
+- DPR capped at 1.7 and reduced below 1 when the CSS viewport itself exceeds the
+  pixel budget;
+- one `setDrawingBufferSize` call per resize;
+- transient zero-sized viewports ignored.
+
+The camera uses a narrow tabletop framing, an adjusted field of view, a small
+vertical view offset on mobile, and a polar-angle limit that keeps the horizon
+out of frame.
+
+## Cross-system invariants
+
+Several decisions are architectural rather than local implementation details:
+
+- WebGPU is mandatory. Renderer initialization failures are visible and there
+  is no WebGL fallback or silent quality downgrade.
+- The full visible surface is the shared source of truth for display, picking,
+  face placement, and the transmission material. The optical proxy is an
+  explicitly bounded exception for light transport only.
+- Physics uses fixed SI-unit steps and does not slow time to recover from a
+  render hitch. Catch-up is capped instead of becoming an unbounded spiral.
+- Facilities own the body only while active. Inactive set pieces can continue
+  their own small simulations, such as an empty swing coasting.
+- Geometry, physics, and orchestration remain separate. A new facility should
+  follow the existing `*Physics` / `graphics/*` / `*Facility` split.
+- GPU device loss, renderer errors, worker errors, and invalid simulation state
+  all use the same fatal UI path.

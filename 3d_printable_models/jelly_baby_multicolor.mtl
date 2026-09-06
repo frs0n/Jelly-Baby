@@ -1,0 +1,35 @@
+# Jelly Baby printable materials
+newmtl body
+Kd 0.407843 0.639216 0.227451
+Ka 0 0 0
+Ks 0.1 0.1 0.1
+d 0.68
+illum 4
+
+newmtl eye
+Kd 0.078431 0.160784 0.019608
+Ka 0 0 0
+Ks 0.1 0.1 0.1
+d 1.0
+illum 2
+
+newmtl dark_face
+Kd 0.145098 0.270588 0.031373
+Ka 0 0 0
+Ks 0.1 0.1 0.1
+d 1.0
+illum 2
+
+newmtl blush
+Kd 0.564706 0.647059 0.250980
+Ka 0 0 0
+Ks 0.1 0.1 0.1
+d 1.0
+illum 2
+
+newmtl tongue
+Kd 0.709804 0.839216 0.254902
+Ka 0 0 0
+Ks 0.1 0.1 0.1
+d 1.0
+illum 2

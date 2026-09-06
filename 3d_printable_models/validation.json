@@ -1,0 +1,164 @@
+{
+  "body": {
+    "vertices": 72234,
+    "triangles": 144464,
+    "watertight": true,
+    "winding_consistent": true,
+    "bounds_mm": [
+      [
+        -48.9254,
+        0.0,
+        -28.9333
+      ],
+      [
+        48.9254,
+        70.0,
+        30.0258
+      ]
+    ]
+  },
+  "eye_L": {
+    "vertices": 1922,
+    "triangles": 3840,
+    "watertight": true,
+    "winding_consistent": true,
+    "bounds_mm": [
+      [
+        -12.8373,
+        42.128,
+        23.9026
+      ],
+      [
+        -6.1663,
+        50.8451,
+        27.7834
+      ]
+    ]
+  },
+  "blush_L": {
+    "vertices": 1922,
+    "triangles": 3840,
+    "watertight": true,
+    "winding_consistent": true,
+    "bounds_mm": [
+      [
+        -18.352,
+        36.3401,
+        22.9645
+      ],
+      [
+        -9.6055,
+        41.2168,
+        27.2729
+      ]
+    ]
+  },
+  "brow_L": {
+    "vertices": 138,
+    "triangles": 272,
+    "watertight": true,
+    "winding_consistent": true,
+    "bounds_mm": [
+      [
+        -12.1703,
+        53.3585,
+        22.5901
+      ],
+      [
+        -7.4668,
+        55.2343,
+        24.842
+      ]
+    ]
+  },
+  "eye_R": {
+    "vertices": 1922,
+    "triangles": 3840,
+    "watertight": true,
+    "winding_consistent": true,
+    "bounds_mm": [
+      [
+        6.1663,
+        42.1281,
+        23.9048
+      ],
+      [
+        12.8372,
+        50.8451,
+        27.7851
+      ]
+    ]
+  },
+  "blush_R": {
+    "vertices": 1922,
+    "triangles": 3840,
+    "watertight": true,
+    "winding_consistent": true,
+    "bounds_mm": [
+      [
+        9.6055,
+        36.3401,
+        22.9765
+      ],
+      [
+        18.352,
+        41.2168,
+        27.277
+      ]
+    ]
+  },
+  "brow_R": {
+    "vertices": 138,
+    "triangles": 272,
+    "watertight": true,
+    "winding_consistent": true,
+    "bounds_mm": [
+      [
+        7.429,
+        53.3573,
+        22.4684
+      ],
+      [
+        12.1318,
+        55.2343,
+        24.9697
+      ]
+    ]
+  },
+  "mouth": {
+    "vertices": 930,
+    "triangles": 1856,
+    "watertight": true,
+    "winding_consistent": true,
+    "bounds_mm": [
+      [
+        -4.6234,
+        35.6499,
+        27.435
+      ],
+      [
+        4.6792,
+        40.9278,
+        29.1216
+      ]
+    ]
+  },
+  "tongue": {
+    "vertices": 930,
+    "triangles": 1856,
+    "watertight": true,
+    "winding_consistent": true,
+    "bounds_mm": [
+      [
+        -2.4182,
+        35.4954,
+        28.2278
+      ],
+      [
+        2.4182,
+        38.0939,
+        29.2452
+      ]
+    ]
+  }
+}
