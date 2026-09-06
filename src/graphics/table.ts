@@ -22,18 +22,18 @@ export async function makeTable(optics:RefractiveLightField,light:{color:THREE.C
   const contact=texture(optics.shadowTexture,contactUV).g.mul(contactInside);
   const albedo=texture(base,uv).rgb;
   const material=new THREE.MeshPhysicalNodeMaterial({metalness:0,roughness:.26,clearcoat:.38,clearcoatRoughness:.23});
-  const facilityUV=positionWorld.xz.sub(facilities.originNode).div(facilities.spanNode);
+  const facilityUV=facilities.worldToUVNode.mul(vec3(positionWorld.xz,1)).xy;
   const facilityInside=float(facilityUV.x.greaterThan(0).and(facilityUV.x.lessThan(1)).and(facilityUV.y.greaterThan(0)).and(facilityUV.y.lessThan(1)));
   // A deterministic tent filter softens the finite window's occlusion. No
   // temporal noise, transparent sorting, or nearly coplanar depth comparisons.
-  let facilityShadow=float(0).add(0);
+  let facilityMask=vec2(0,0).add(0);
   for(let y=-1;y<=1;y++)for(let x=-1;x<=1;x++) {
     const weight=(x===0?2:1)*(y===0?2:1)/16;
-    facilityShadow=facilityShadow.add(texture(facilities.target.texture,facilityUV.add(vec2(x,y).mul(1.5/512))).r.mul(weight));
+    facilityMask=facilityMask.add(texture(facilities.target.texture,facilityUV.add(vec2(x,y).mul(1.5/512))).rg.mul(weight));
   }
-  facilityShadow=facilityShadow.mul(facilityInside);
+  const facilityShadow=facilityMask.x.mul(facilityInside),facilityContact=facilityMask.y.mul(facilityInside);
   const visibility=float(1).sub(shadow).mul(float(1).sub(facilityShadow));
-  material.colorNode=albedo.mul(float(1).sub(float(1).sub(visibility).mul(light.windowFraction))).mul(float(1).sub(contact.mul(.40)));
+  material.colorNode=albedo.mul(float(1).sub(float(1).sub(visibility).mul(light.windowFraction))).mul(float(1).sub(contact.mul(.40))).mul(float(1).sub(facilityContact.mul(.35)));
   // Plane UV-v points toward -Z; the metre-scaled world UV points toward +Z.
   material.normalNode=normalMap(texture(normal,uv),vec2(.27,-.27));
   material.roughnessNode=texture(roughness,uv).r.mul(.30).add(.12);

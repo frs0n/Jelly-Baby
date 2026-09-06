@@ -91,6 +91,20 @@ onto the clear approach side. Walking, jumping, and grabbing hand control to the
 facility during play; the camera can still orbit. Reset restores both the baby
 and the facilities.
 
+A miniature trampoline sits on the opposite side of spawn, with the same **Play
+Trampoline** / **Get Off Trampoline** interaction. Its spring bed applies upward
+forces through the jelly's feet, leaving flight to gravity and landing deformation
+to the FEM solver. Automatic leg drive gradually increases bounce energy toward
+a 10.5 cm target. The normal blinking face transitions to laughter after the
+first bounce above 3.5 cm. The bed uses a single deflection mode with a fixed
+perimeter and damped unloaded recoil; it is not a full cloth simulation.
+
+Facility audio follows physics events: swing hinge friction at reversals and
+quiet air movement at bottom crossings; trampoline fabric thumps on landing and
+short steel resonance during rebound. These are restrained procedural sounds,
+with cached variations, distance attenuation, stereo placement and bounded
+voices. They share the existing sound toggle and stop on reset or tab hiding.
+
 To add another facility, implement `Facility` in `src/game/facilities.ts` and
 register it with `facilities.add(...)` in the runtime. Give it a unique `id`, a
 short `label`, and an `interactionDistance` (return `Infinity` when unavailable).
@@ -110,7 +124,11 @@ solver. `FacilityShadows` projects the full opaque facility geometry along the
 measured window direction into a cached, fixed-world mask sampled directly by
 the table. Register future facilities with a world-space bounding box covering
 their full motion envelope. This avoids transparent ground overlays and keeps
-idle shadows stable; moving parts invalidate the cached mask automatically.
+idle shadows stable; moving parts and deforming geometry invalidate the cached
+mask automatically.
+The mask also stores a separate height-faded contact channel for low supports
+and rubber feet. Both channels union overlapping geometry, so the bed cannot
+overwrite the shadows from the legs beneath it.
 
 ## Verification
 
@@ -119,6 +137,9 @@ npm run lint
 npm run typecheck
 npm run test:physics
 npm run test:swing
+npm run test:trampoline
+npm run test:facility-shadows
+npm run test:facility-sound
 npm run test:performance
 npm run build
 ```

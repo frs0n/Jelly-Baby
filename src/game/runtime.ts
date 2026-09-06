@@ -18,6 +18,7 @@ import { FlavorPicker } from './flavor-picker.ts';
 import { Facilities } from './facilities.ts';
 import { SwingFacility } from './swing-facility.ts';
 import { FacilityShadows } from '../graphics/facility-shadows.ts';
+import { TrampolineFacility } from './trampoline-facility.ts';
 
 export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
   stage('Starting WebGPU');
@@ -41,14 +42,15 @@ export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
   const composite=createComposite(renderer,scene,camera);
   const rig=new Locomotion(body);
   const facilities=new Facilities();
-  facilities.add(new SwingFacility(scene,body,facilityShadows));
+  facilities.add(new SwingFacility(scene,body,facilityShadows,sound.facility));
+  facilities.add(new TrampolineFacility(scene,body,facilityShadows,sound.facility));
   const flavorPicker=new FlavorPicker(flavor=>{
     baby.setFlavor(flavor);optics.setAbsorption(JELLY_FLAVORS[flavor].absorption);
   });
   rig.onContact=(speed,foot)=>sound.contact(speed,foot);
   const physicsClock=new FixedStepper(PHYS.step);
   let lastTime=0,disposed=false;
-  const reset=()=>{facilities.reset();input.recenter();body.reset();baby.resetFace();physicsClock.reset();};
+  const reset=()=>{sound.stopFacilities();facilities.reset();input.recenter();body.reset();baby.resetFace();physicsClock.reset();};
   const input=new Input(camera,renderer.domElement,body,baby.mesh,rig,sound,reset);
   input.bodyControlled=()=>!!facilities.active;
   input.facilityCameraDistance=()=>facilities.active?.cameraDistance;
@@ -102,6 +104,7 @@ export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
       facilities.update();baby.update(dt,facilities.active?.laughing??false);
       facilityShadows.update(renderer);
       input.update(dt);
+      sound.listen(camera);
       transport.follow();
       optics.update(renderer,body);
       table.mesh.position.x=body.center.x;table.mesh.position.z=body.center.z;

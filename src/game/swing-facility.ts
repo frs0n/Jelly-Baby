@@ -5,6 +5,7 @@ import type { SoftBody } from '../physics/soft-body.js';
 import { Swing } from '../graphics/swing.ts';
 import { SwingPhysics, SWING } from './swing-physics.ts';
 import type { Facility } from './facilities.ts';
+import { FacilityMotionSound, type FacilitySoundSink } from './facility-sound.ts';
 
 const LAUGH_ANGLE=15*Math.PI/180;
 
@@ -18,7 +19,9 @@ export class SwingFacility implements Facility {
   private readonly delta=new Vector3();
   private readonly axis=new Vector3();
   private laughStarted=false;
-  constructor(scene:Scene,body:SoftBody,shadows:FacilityShadows) {
+  private readonly audio:FacilityMotionSound;
+  constructor(scene:Scene,body:SoftBody,shadows:FacilityShadows,sound:FacilitySoundSink=()=>{}) {
+    this.audio=new FacilityMotionSound(sound,{x:SWING.x,y:SWING.height,z:SWING.z});
     this.physics=new SwingPhysics(body);scene.add(this.visual.group);
     shadows.add(this.visual.group,new Box3(
       new Vector3(SWING.x-.10,0,SWING.z-.15),
@@ -37,6 +40,7 @@ export class SwingFacility implements Facility {
   }
   step(h:number) {
     this.physics.step(h);
+    this.audio.swing(h,this.physics.angle,this.physics.speed,this.active);
     // Remember the first substantial arc so the face stays joyful through
     // subsequent bottom crossings. Each new ride starts with the resting face.
     if(this.active&&Math.abs(this.physics.angle)>=LAUGH_ANGLE)this.laughStarted=true;
@@ -62,6 +66,6 @@ export class SwingFacility implements Facility {
     if(changed){b.wake();b.surfaceDirty=true;b.updateCenter();}
   }
   update() {this.visual.update(this.physics.angle);}
-  reset() {this.laughStarted=false;this.physics.reset();this.update();}
+  reset() {this.audio.reset();this.laughStarted=false;this.physics.reset();this.update();}
   dispose() {this.visual.group.removeFromParent();this.visual.dispose();}
 }
