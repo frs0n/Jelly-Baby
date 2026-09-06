@@ -6,6 +6,7 @@ import type { Appearance } from './appearance.ts';
 import * as THREE from 'three/webgpu';
 import type { SoftBody } from '../physics/soft-body.js';
 import type { Input } from '../game/input.ts';
+import type { Facilities } from '../game/facilities.ts';
 import type { Baby } from '../graphics/baby.ts';
 import { RoomClient } from './client.ts';
 import { Visitors } from './visitors.ts';
@@ -17,6 +18,7 @@ export class Playground {
   private hand:ReachingHand;
   private body:SoftBody;
   private input:Input;
+  private facilities:Facilities;
   private floorCenter:number;
   private elapsed=0;
   private jump=false;
@@ -26,13 +28,18 @@ export class Playground {
   private impacts=new ImpactResponse();
   private appearanceKey="";
   private changeAppearance:(palette:Appearance)=>void;
-  constructor(scene:THREE.Scene,body:SoftBody,baby:Baby,input:Input,changeAppearance:(palette:Appearance)=>void,fail:(error:Error)=>void) {
-    this.body=body;this.input=input;this.changeAppearance=changeAppearance;this.floorCenter=body.center.y;
+  constructor(scene:THREE.Scene,body:SoftBody,baby:Baby,input:Input,facilities:Facilities,changeAppearance:(palette:Appearance)=>void,fail:(error:Error)=>void) {
+    this.body=body;this.input=input;this.facilities=facilities;this.changeAppearance=changeAppearance;this.floorCenter=body.center.y;
     this.hand=new ReachingHand(body);
     this.visitors=new Visitors(scene,baby.group,body.center,{fail,localGrip:()=>body.grabs.find(g=>!g.cosmetic)?.point??null});
     this.drag=new OnlineDrag(input,body,this.client,this.visitors);
     input.allowGrab=true;input.enabled=false;
     input.onJump=()=>{this.jump=true;};input.onDash=()=>{this.dash=true;};
+    // Ride at once and ask afterwards, as dragging another player already does.
+    // Occupancy is the authority's, so a refused seat puts the rider back down.
+    facilities.onMount=facility=>this.client.enterFacility(facility);
+    facilities.onDismount=()=>this.client.leaveFacility();
+    this.client.onFacilityResult=(facility,accepted)=>{if(!accepted)facilities.rollback(facility);};
     const count=document.querySelector<HTMLElement>('#player-count')!;
     this.client.onError=fail;
     this.client.onState=players=>{
@@ -43,7 +50,7 @@ export class Playground {
       if(self&&this.first){this.first=false;input.rig.yaw=self.yaw;this.reposition(self.x,self.y,self.z,1);}
     };
     const join=()=>{input.clear();this.first=true;this.jump=this.dash=false;void this.client.join();};
-    const neutral=()=>{this.jump=this.dash=false;this.client.input({x:0,z:0,jump:false,dash:false});};
+    const neutral=()=>{this.jump=this.dash=false;this.client.input({x:0,z:0,jump:false,dash:false,phase:this.facilities.phase});};
     window.addEventListener('blur',neutral,{signal:this.aborted.signal});
     document.addEventListener('visibilitychange',()=>{if(document.hidden)neutral();},{signal:this.aborted.signal});
     window.addEventListener('pagehide',()=>this.client.close(),{signal:this.aborted.signal});
@@ -63,7 +70,7 @@ export class Playground {
     this.elapsed+=dt;
     if(this.elapsed>=1/30) {
       this.elapsed=0;
-      this.client.input({x:this.input.rig.move.x,z:this.input.rig.move.z,jump:this.jump,dash:this.dash});this.jump=this.dash=false;
+      this.client.input({x:this.input.rig.move.x,z:this.input.rig.move.z,jump:this.jump,dash:this.dash,phase:this.facilities.phase});this.jump=this.dash=false;
     }
     const p=this.client.players.find(p=>p.id===this.client.id);
     if(p) {
@@ -75,6 +82,9 @@ export class Playground {
 
     }else this.input.rig.move.set(0,0,0);
     this.visitors.update(dt,this.client.serverNow-100);
+    // Everyone shares one swing and one trampoline: drive the world objects from
+    // whoever the authority says is riding them.
+    this.facilities.sync(this.visitors.riders);
     this.hand.update(this.visitors.reachFor(this.client.id),this.input.rig.yaw,dt);
   }
   dispose(){this.hand.clear();this.drag.dispose();this.aborted.abort();this.client.close();this.visitors.dispose();}

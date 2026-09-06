@@ -12,6 +12,11 @@ import { ReachingHand, type Reach } from './reaching-hand.ts';
 import { reconcile } from './reconcile.ts';
 import type { Player } from './simulation.ts';
 import type { Point } from './grabs.ts';
+import { SwingPhysics } from '../game/swing-physics.ts';
+import { TrampolinePhysics, TRAMPOLINE } from '../game/trampoline-physics.ts';
+import { FACILITY_NONE, FACILITY_SWING, clampPhase } from './facility-state.ts';
+
+const SWING_LAUGH_ANGLE=15*Math.PI/180;
 
 export type ActorFrame={buffer?:ArrayBuffer;lengths:number[];updated:boolean[];bounds:number[][];root:Point;center:Point;gripPoint:Point|null;handPoint:Point|null;physicsSteps:number};
 export class RemoteActor {
@@ -31,9 +36,14 @@ export class RemoteActor {
   private bounds:number[][]=[];
   private lengths:number[]=[];
   private surfaceRevision=-1;
+  private swing:SwingPhysics;
+  private trampoline:TrampolinePhysics;
+  private facility=FACILITY_NONE;
+  private laughing=false;
   constructor(model:BabyModel) {
     this.body=new SoftBody(parseBabyCage(model.buffer,model.manifest,true));
     this.rig=new Locomotion(this.body);this.baby=new Baby(this.body);this.hand=new ReachingHand(this.body);
+    this.swing=new SwingPhysics(this.body);this.trampoline=new TrampolinePhysics(this.body);
     for(let i=0;i<80;i++){this.rig.step(PHYS.step);this.body.step(PHYS.step);}
     this.body.updateSurface();this.baby.update();this.restY=this.body.center.y;
     this.baby.group.traverse(object=>{if(object instanceof THREE.Mesh)this.meshes.push(object);});
@@ -47,6 +57,8 @@ export class RemoteActor {
       for(let i=0;i<b.x.length;i+=3){b.x[i]+=dx;b.x[i+1]+=state.y;b.x[i+2]+=dz;b.previous[i]+=dx;b.previous[i+1]+=state.y;b.previous[i+2]+=dz;}
       b.updateSurface();this.rig.yaw=state.yaw;b.wake();this.initialized=true;
     }
+    if(state.facility!==this.facility)this.mount(state);
+    if(this.facility!==FACILITY_NONE)return this.ride(dt,state);
     const g=state.grab;
     if(g) {
       if(!this.grip||this.by!==g.by) {
@@ -67,9 +79,13 @@ export class RemoteActor {
     });
     reconcile(b,state,this.restY,0,dt);
     if(b.surfaceDirty)b.updateSurface();
-    const skin=b.surfaceRevision!==this.surfaceRevision;this.surfaceRevision=b.surfaceRevision;
     if(!b.isFinite())throw new Error('Remote soft-body simulation is not finite');
-    const face=this.baby.update(dt);
+    return this.pack(dt,state,steps);
+  }
+  private pack(dt:number,state:Player,steps:number):ActorFrame {
+    const b=this.body;
+    const skin=b.surfaceRevision!==this.surfaceRevision;this.surfaceRevision=b.surfaceRevision;
+    const face=this.baby.update(dt,this.laughing);
     const updated=this.meshes.map(mesh=>mesh===this.baby.mesh?skin:face||!this.bounds.length);
     const point=(v:THREE.Vector3):Point=>({x:v.x,y:v.y,z:v.z});
     const frame:ActorFrame={lengths:this.lengths,updated,bounds:this.bounds,root:{x:state.x,y:state.y,z:state.z},center:point(b.center),gripPoint:this.grip?point(this.grip.point):null,handPoint:this.hand.tip?point(this.hand.tip):null,physicsSteps:steps};
@@ -87,6 +103,33 @@ export class RemoteActor {
       this.bounds[i]=[...box.min.toArray(),...box.max.toArray(),...sphere.center.toArray(),sphere.radius];
     });
     frame.buffer=packed;return frame;
+  }
+  /** Board or step off in step with the authority, landing the same pose the
+   * rider's own client lands. Dismounts fall back to position reconciliation. */
+  private mount(state:Player) {
+    const b=this.body;
+    if(this.grip){removeGrip(b,this.grip);this.grip=null;this.by='';}
+    this.hand.clear();this.facility=state.facility;this.laughing=false;
+    if(this.facility===FACILITY_NONE){b.canSleep=true;this.rig.reset();return;}
+    const phase=clampPhase(this.facility,state.phase);
+    if(this.facility===FACILITY_SWING){this.swing.angle=phase;this.swing.speed=0;this.swing.seat();}
+    else{this.trampoline.height=phase;this.trampoline.speed=0;this.trampoline.seat();}
+  }
+  /** Replay a ride from its single relayed scalar. The seat springs and the FEM
+   * produce the wobble here exactly as they do on the rider's own screen. */
+  private ride(dt:number,state:Player):ActorFrame {
+    const b=this.body,h=this.clock.step,phase=clampPhase(this.facility,state.phase);
+    this.laughing ||= this.facility===FACILITY_SWING
+      ?Math.abs(phase)>=SWING_LAUGH_ANGLE
+      :phase>=TRAMPOLINE.laughHeight;
+    const steps=this.clock.advance(dt,()=>{
+      if(this.facility===FACILITY_SWING)this.swing.follow(h,phase);
+      else this.trampoline.follow(h,phase);
+      b.step(h);
+    });
+    if(b.surfaceDirty)b.updateSurface();
+    if(!b.isFinite())throw new Error('Remote soft-body simulation is not finite');
+    return this.pack(dt,state,steps);
   }
   dispose(){this.hand.clear();this.baby.dispose();this.body.cage.opticalSurface.geometry.dispose();}
 }

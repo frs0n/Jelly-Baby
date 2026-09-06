@@ -2,7 +2,8 @@ import { StateEncoder } from '../src/multiplayer/protocol.ts';
 import { beginGrab, moveGrab, releaseGrabs, expireGrabs, point } from '../src/multiplayer/grabs.ts';
 import { paletteFromDigest, type Appearance } from '../src/multiplayer/appearance.ts';
 import { DurableObject } from 'cloudflare:workers';
-import { CAPACITY, STEP, controls, simulate, spawn, type Controls, type Player } from '../src/multiplayer/simulation.ts';
+import { CAPACITY, STEP, controls, enterFacility, leaveFacility, simulate, spawn, type Controls, type Player } from '../src/multiplayer/simulation.ts';
+import { isFacility } from '../src/multiplayer/facility-state.ts';
 
 type Session={player:Player;ticket:string;input:Controls;seen:number;budget:number;budgetTime:number;inputTime:number;leaseTime:number};
 const TICKET_TTL=20000,LEASE_TTL=30000,LEASE_RENEWAL=10000;
@@ -34,7 +35,7 @@ export class JellyRoom extends DurableObject<Env> {
     const pair=new WebSocketPair(),client=pair[0],socket=pair[1];socket.accept();
     const player=spawn(crypto.randomUUID(),[...this.sessions.values()].map(s=>s.player),JSON.parse(String(seat[0].appearance)) as Appearance);
     const now=Date.now();
-    const s:Session={player,ticket,input:{x:0,z:0,jump:false,dash:false},seen:now,budget:80,budgetTime:now,inputTime:now,leaseTime:now};
+    const s:Session={player,ticket,input:{x:0,z:0,jump:false,dash:false,phase:0},seen:now,budget:80,budgetTime:now,inputTime:now,leaseTime:now};
     this.sessions.set(socket,s);
     socket.addEventListener('message',e=>{
       const now=Date.now();s.budget=Math.min(80,s.budget+(now-s.budgetTime)*.09);s.budgetTime=now;
@@ -55,12 +56,19 @@ export class JellyRoom extends DurableObject<Env> {
         const target=point(data.point);
         if(!target){socket.close(1008,'Invalid target');this.leave(socket);return;}
         moveGrab(this.players(),player.id,target,now);
+      }else if(data.type==='facility-enter') {
+        if(!isFacility(data.facility)){socket.close(1008,'Invalid facility');this.leave(socket);return;}
+        const accepted=enterFacility(this.players(),player.id,data.facility);
+        socket.send(JSON.stringify({type:'facility-result',facility:data.facility,accepted}));
+        if(accepted){s.input={...s.input,phase:0};this.broadcast();}
+      }else if(data.type==='facility-leave') {
+        if(leaveFacility(this.players(),player.id)){s.input={...s.input,phase:0};this.broadcast();}
       }else if(data.type==='grab-end') {
         releaseGrabs(this.players().filter(p=>p.grab?.by===player.id),player.id);this.broadcast();
       }else if(data.type==='reset') {
         releaseGrabs(this.players(),player.id);
         Object.assign(player,spawn(player.id,[...this.sessions.values()].filter(other=>other!==s).map(other=>other.player),player.appearance));
-        s.input={x:0,z:0,jump:false,dash:false};
+        s.input={x:0,z:0,jump:false,dash:false,phase:0};
       }else if(data.type==='ping'&&typeof data.t==='number'&&Number.isFinite(data.t)){socket.send(JSON.stringify({type:'pong',t:data.t}));
       }else if(data.type!=='ping'){socket.close(1008,'Unknown command');this.leave(socket);return;}
       s.seen=now;
@@ -85,7 +93,8 @@ export class JellyRoom extends DurableObject<Env> {
     for(const [ws,s] of this.sessions) {
       if(now-s.seen>15000){ws.close(1001,'Inactive');this.leave(ws);}
       else {
-        if(now-s.inputTime>350)s.input={x:0,z:0,jump:false,dash:false};
+        // A stale rider keeps its seat but stops driving the ride's phase.
+        if(now-s.inputTime>350)s.input={x:0,z:0,jump:false,dash:false,phase:s.player.facility?s.input.phase:0};
         if(now-s.leaseTime>=LEASE_RENEWAL){s.leaseTime=now;void this.env.MATCHMAKER.getByName('public-v1').touch(s.ticket);}
       }
     }

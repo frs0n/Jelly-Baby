@@ -14,6 +14,7 @@
     "test:trampoline": "node --experimental-strip-types scripts/verify-trampoline.mjs",
     "test:facility-shadows": "node --experimental-strip-types scripts/verify-facility-shadows.mjs",
     "test:facility-sound": "node --experimental-strip-types scripts/verify-facility-sound.mjs",
+    "test:facility-online": "node --experimental-strip-types scripts/verify-facility-online.mjs",
     "test:multitouch": "node --experimental-strip-types scripts/verify-multitouch.mjs",
     "test:performance": "node --experimental-strip-types scripts/verify-performance.mjs",
     "benchmark": "node --experimental-strip-types scripts/benchmark.mjs",

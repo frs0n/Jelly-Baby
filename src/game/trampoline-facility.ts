@@ -4,10 +4,12 @@ import type { SoftBody } from '../physics/soft-body.js';
 import { Trampoline } from '../graphics/trampoline.ts';
 import { TRAMPOLINE, TrampolinePhysics } from './trampoline-physics.ts';
 import type { Facility } from './facilities.ts';
+import { FACILITY_TRAMPOLINE } from '../multiplayer/facility-state.ts';
 import { FacilityMotionSound, type FacilitySoundSink } from './facility-sound.ts';
 
 export class TrampolineFacility implements Facility {
   readonly id='spawn-trampoline';
+  readonly facility=FACILITY_TRAMPOLINE;
   readonly label='Trampoline';
   readonly cameraDistance=.30;
   readonly physics:TrampolinePhysics;
@@ -23,6 +25,8 @@ export class TrampolineFacility implements Facility {
     ));
   }
   get active() {return this.physics.active;}
+  get phase() {return this.physics.phase;}
+  setRemote(phase?:number) {this.physics.setRemotePhase(phase);}
   get laughing() {return this.active&&this.laughStarted;}
   get interactionDistance() {
     return this.physics.nearby?Math.hypot(this.physics.body.center.x-TRAMPOLINE.x,this.physics.body.center.z-TRAMPOLINE.z):Infinity;
@@ -30,7 +34,7 @@ export class TrampolineFacility implements Facility {
   interact() {const changed=this.physics.toggle();if(changed){this.laughStarted=false;this.audio.reset();}return changed;}
   step(h:number) {
     this.physics.step(h);
-    this.audio.trampoline(h,this.physics.supported,this.physics.speed,this.physics.compression,this.active);
+    this.audio.trampoline(h,this.physics.supported,this.physics.speed,this.physics.compression,this.active||this.physics.remotePhase!==null);
   }
   afterStep() {
     if(this.active) {

@@ -11,6 +11,8 @@ type Options={model?:Promise<BabyModel>;worker?:()=>Worker;fail?:(error:Error)=>
 type Visitor={group:THREE.Group;meshes:THREE.Mesh[];worker:Worker;ready:boolean;busy:boolean;elapsed:number;frame:ActorFrame|null;recycle?:ArrayBuffer;vertices?:ArrayBuffer;center:THREE.Vector3;state:Player;samples:{time:number;state:Player}[];playback?:MeshPlayback};
 /** Local FEM and face animation with a lightweight remote skin and bounded updates. */
 export class Visitors {
+  /** Facility id to the interpolated ride phase, for the shared world objects. */
+  readonly riders=new Map<number,number>();
   private template:THREE.Group;
   private visitors=new Map<string,Visitor>();
   private scene:THREE.Scene;
@@ -91,6 +93,7 @@ export class Visitors {
     return nearest;
   }
   update(dt:number,renderTime=performance.now()-100) {
+    this.riders.clear();
     for(const [id,v] of this.visitors) {
       while(v.samples.length>2&&v.samples[1].time<=renderTime)v.samples.shift();
       const from=v.samples[0],to=v.samples[1];
@@ -99,11 +102,14 @@ export class Visitors {
       if(to){
         for(const key of ['x','y','z','vx','vy','vz'] as const)state[key]=THREE.MathUtils.lerp(from.state[key],to.state[key],t);
         const angle=to.state.yaw-from.state.yaw;state.yaw=from.state.yaw+Math.atan2(Math.sin(angle),Math.cos(angle))*t;
+        // Only blend a phase within one continuous ride; a mount is a step.
+        if(from.state.facility===to.state.facility)state.phase=THREE.MathUtils.lerp(from.state.phase,to.state.phase,t);
         if(state.grab&&from.state.grab?.by===state.grab.by&&to.state.grab?.by===state.grab.by){
           const a=from.state.grab.target,b=to.state.grab.target;
           state.grab={...state.grab,target:{x:THREE.MathUtils.lerp(a.x,b.x,t),y:THREE.MathUtils.lerp(a.y,b.y,t),z:THREE.MathUtils.lerp(a.z,b.z,t)}};
         }
       }
+      if(state.facility)this.riders.set(state.facility,state.phase);
       // The pose and its grip point share one interpolated root-relative space.
       // Advancing the network root must never reset on a worker delivery.
       v.group.position.set(state.x,state.y,state.z);

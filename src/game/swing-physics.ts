@@ -1,27 +1,39 @@
 import { Vector3 } from 'three/webgpu';
 import type { SoftBody } from '../physics/soft-body.js';
 import { PHYS } from '../physics/constants.js';
+import { FACILITY_SWING, facilityAnchor } from '../multiplayer/facility-state.ts';
 
+const ANCHOR=facilityAnchor(FACILITY_SWING)!;
 // Metres, matching the 7 cm confection and the existing simulation's gravity.
-export const SWING={x:-.155,z:-.035,height:.172,length:.128,width:.108,maxAngle:.85};
+// The ground anchor is shared with the authority, which validates mounts there.
+export const SWING={x:ANCHOR.x,z:ANCHOR.z,height:.172,length:.128,width:.108,maxAngle:.85};
 
 /** Nonlinear driven pendulum; a compliant rider remains in the FEM solver. */
 export class SwingPhysics {
   angle=0;
   speed=0;
   riding=false;
+  /** Set while another player owns this seat; their relayed angle drives it. */
+  remotePhase:number|null=null;
   private elapsed=0;
   private readonly target=new Vector3();
   readonly body:SoftBody;
   constructor(body:SoftBody) {this.body=body;}
   get nearby() {
+    if(this.remotePhase!==null)return false;
     return !this.body.grab&&this.body.grounded&&Math.hypot(this.body.center.x-SWING.x,this.body.center.z-SWING.z)<.105;
   }
+  setRemotePhase(phase?:number) {this.remotePhase=phase??null;}
   toggle() {
     if(this.riding){this.leave();return true;}
     if(!this.nearby)return false;
     this.riding=true;this.elapsed=0;
-    // Board at the current seat position, including an empty swing still coasting.
+    this.seat();
+    return true;
+  }
+  /** Board at the current seat position, including an empty swing still coasting.
+   * Shared with remote playback so an observed mount lands identically. */
+  seat() {
     for(let i=0;i<this.body.mass.length;i++) {
       this.riderTarget(i,this.target);
       this.body.x.set(this.target.toArray(),i*3);
@@ -30,7 +42,6 @@ export class SwingPhysics {
       this.body.velocity[i*3+2]=-this.speed*(this.target.y-SWING.height);
     }
     this.body.previous.set(this.body.x);this.body.wake();this.body.updateCenter();this.body.surfaceDirty=true;
-    return true;
   }
   leave() {
     // A deliberate step off onto the clear approach side, outside the swept arc.
@@ -54,7 +65,22 @@ export class SwingPhysics {
     const c=Math.cos(this.angle),s=Math.sin(this.angle);
     out.set(SWING.x+r[j],SWING.height+c*y+s*z,SWING.z-s*y+c*z);
   }
+  /** Reproduce a remote rider's pose from the replicated seat angle.
+   * The angle is authority-relayed, so it is applied instead of integrated;
+   * the same seat springs then deform this body exactly as a local ride does. */
+  follow(h:number,angle:number) {
+    this.speed=h>0?(angle-this.angle)/h:this.speed;
+    this.angle=angle;
+    this.drive(h);
+  }
+  get phase() {return this.angle;}
   step(h:number) {
+    if(this.remotePhase!==null) {
+      // Someone else is riding. Track their angle so the seat this client draws
+      // matches theirs, and never integrate a model that would fight it.
+      this.speed=h>0?(this.remotePhase-this.angle)/h:this.speed;
+      this.angle=this.remotePhase;return;
+    }
     this.elapsed+=h;
     const frequency=PHYS.gravity/SWING.length;
     const energy=.5*this.speed*this.speed+frequency*(1-Math.cos(this.angle));
@@ -70,6 +96,10 @@ export class SwingPhysics {
     const kinetic=ceiling-frequency*(1-Math.cos(this.angle));
     if(.5*this.speed*this.speed>kinetic)this.speed=Math.sign(this.speed)*Math.sqrt(Math.max(0,2*kinetic));
     if(!this.riding)return;
+    this.drive(h);
+  }
+  /** Seat frame to jelly. Shared by the local ride and by remote playback. */
+  private drive(h:number) {
     const b=this.body;b.canSleep=false;b.wake();
     for(let i=0;i<b.mass.length;i++) {
       const j=i*3;this.riderTarget(i,this.target);

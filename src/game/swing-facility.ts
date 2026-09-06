@@ -5,12 +5,14 @@ import type { SoftBody } from '../physics/soft-body.js';
 import { Swing } from '../graphics/swing.ts';
 import { SwingPhysics, SWING } from './swing-physics.ts';
 import type { Facility } from './facilities.ts';
+import { FACILITY_SWING } from '../multiplayer/facility-state.ts';
 import { FacilityMotionSound, type FacilitySoundSink } from './facility-sound.ts';
 
 const LAUGH_ANGLE=15*Math.PI/180;
 
 export class SwingFacility implements Facility {
   readonly id='spawn-swing';
+  readonly facility=FACILITY_SWING;
   readonly label='Swing';
   readonly cameraDistance=.29;
   readonly physics:SwingPhysics;
@@ -29,6 +31,8 @@ export class SwingFacility implements Facility {
     ));
   }
   get active() {return this.physics.riding;}
+  get phase() {return this.physics.phase;}
+  setRemote(phase?:number) {this.physics.setRemotePhase(phase);}
   get laughing() {return this.active&&this.laughStarted;}
   get interactionDistance() {
     return this.physics.nearby?Math.hypot(this.physics.body.center.x-SWING.x,this.physics.body.center.z-SWING.z):Infinity;
@@ -40,7 +44,7 @@ export class SwingFacility implements Facility {
   }
   step(h:number) {
     this.physics.step(h);
-    this.audio.swing(h,this.physics.angle,this.physics.speed,this.active);
+    this.audio.swing(h,this.physics.angle,this.physics.speed,this.active||this.physics.remotePhase!==null);
     // Remember the first substantial arc so the face stays joyful through
     // subsequent bottom crossings. Each new ride starts with the resting face.
     if(this.active&&Math.abs(this.physics.angle)>=LAUGH_ANGLE)this.laughStarted=true;

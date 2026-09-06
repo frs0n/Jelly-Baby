@@ -1,7 +1,13 @@
 export interface Facility {
   readonly id:string;
   readonly label:string;
+  /** Replicated facility id, shared with the authority. */
+  readonly facility:number;
   readonly active:boolean;
+  /** The single scalar that describes this ride to every other player. */
+  readonly phase:number;
+  /** Occupancy relayed by the authority: another player's phase, or nothing. */
+  setRemote(phase?:number):void;
   /** Distance to an available interaction, or Infinity when unavailable. */
   readonly interactionDistance:number;
   readonly laughing?:boolean;
@@ -22,6 +28,8 @@ export class Facilities {
   private readonly hint=document.createElement('span');
   private readonly button=document.createElement('button');
   onInteract:()=>void=()=>{};
+  onMount:(facility:number)=>void=()=>{};
+  onDismount:()=>void=()=>{};
   constructor() {
     this.prompt.className='facility-prompt';this.prompt.hidden=true;
     this.hint.className='facility-hint';this.hint.setAttribute('role','status');
@@ -44,7 +52,23 @@ export class Facilities {
       .sort((a,b)=>a.interactionDistance-b.interactionDistance)[0];
   }
   private interact() {
-    if(this.candidate?.interact()){this.onInteract();this.update();}
+    const candidate=this.candidate;if(!candidate)return;
+    const dismounting=candidate.active;
+    if(!candidate.interact())return;
+    this.onInteract();this.update();
+    // Ride locally at once and tell the authority; a refused seat rolls back.
+    if(dismounting)this.onDismount();else this.onMount(candidate.facility);
+  }
+  get activeId() {return this.active?.facility??0;}
+  get phase() {return this.active?.phase??0;}
+  /** Apply authority occupancy, keyed by facility id, excluding this player. */
+  sync(riders:ReadonlyMap<number,number>) {
+    for(const item of this.items)item.setRemote(riders.get(item.facility));
+  }
+  /** Undo a predicted mount the authority refused. */
+  rollback(facility:number) {
+    const item=this.items.find(item=>item.facility===facility);
+    if(item?.active&&item.interact()){this.onInteract();this.update();}
   }
   step(h:number) {for(const item of this.items)item.step(h);}
   afterStep() {for(const item of this.items)item.afterStep?.();}

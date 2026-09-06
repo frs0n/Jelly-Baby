@@ -16,6 +16,7 @@ export class RoomClient {
   onState:(players:Player[])=>void=()=>{};
   onError:(error:Error)=>void=()=>{};
   onGrabResult:(target:string,accepted:boolean)=>void=()=>{};
+  onFacilityResult:(facility:number,accepted:boolean)=>void=()=>{};
   private socket:WebSocket|undefined;
   private generation=0;
   private heartbeat:ReturnType<typeof setInterval>|undefined;
@@ -41,7 +42,7 @@ export class RoomClient {
       const socket=new WebSocket(url);this.socket=socket;
       socket.addEventListener('message',event=>{
         if(generation!==this.generation)return;
-        const packet=JSON.parse(event.data) as StatePacket|{type:'welcome';id:string}|{type:'grab-result';target:string;accepted:boolean}|{type:'pong';t:number};
+        const packet=JSON.parse(event.data) as StatePacket|{type:'welcome';id:string}|{type:'grab-result';target:string;accepted:boolean}|{type:'facility-result';facility:number;accepted:boolean}|{type:'pong';t:number};
         if(packet.type==='welcome') {
           this.id=packet.id;this.connected=true;clearTimeout(this.timeout);this.lastState=performance.now();this.send({type:'ping',t:performance.now()});
           this.heartbeat=setInterval(()=>{
@@ -50,6 +51,7 @@ export class RoomClient {
           },3000);
         }else if(packet.type==='pong'){const sample=Math.max(0,performance.now()-packet.t);this.rtt=this.rtt?this.rtt*.8+sample*.2:sample;
         }else if(packet.type==='grab-result') {this.onGrabResult(packet.target,packet.accepted);
+        }else if(packet.type==='facility-result') {this.onFacilityResult(packet.facility,packet.accepted);
         }else if(packet.type==='state') {
           this.lastState=performance.now();this.sampleTime=packet.time;const offset=this.lastState-packet.time;this.clockOffset=this.clockOffset===null?offset:Math.min(this.clockOffset+.1,offset);this.players=this.decoder.decode(packet).players;this.onState(this.players);
         }
@@ -71,11 +73,16 @@ export class RoomClient {
     if(this.send({type:'grab-move',point:p})){this.lastGrab=key;this.grabAt=now;}
   }
   endGrab(){this.send({type:'grab-end'});}
+  enterFacility(facility:number){this.lastInput='';this.inputAt=-Infinity;this.send({type:'facility-enter',facility});}
+  leaveFacility(){this.lastInput='';this.inputAt=-Infinity;this.send({type:'facility-leave'});}
   reset(){this.lastInput='';this.inputAt=-Infinity;this.send({type:'reset'});}
   input(value:Controls){
-    const key=JSON.stringify(value),now=performance.now();
+    // Quantise the ride phase to what the wire carries, so a resting facility
+    // keeps deduplicating instead of trickling identical rounded samples.
+    const packet={...value,phase:Math.round(value.phase*10000)/10000};
+    const key=JSON.stringify(packet),now=performance.now();
     if(!value.jump&&!value.dash&&key===this.lastInput&&now-this.inputAt<200)return;
-    if(this.send({type:'input',...value})){this.lastInput=key;this.inputAt=now;}
+    if(this.send({type:'input',...packet})){this.lastInput=key;this.inputAt=now;}
   }
   private send(packet:unknown){if(this.socket?.readyState!==WebSocket.OPEN)return false;this.socket.send(JSON.stringify(packet));return true;}
   close() {

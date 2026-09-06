@@ -3,14 +3,14 @@ import type { Appearance } from './appearance.ts';
 
 // Ordered, reliable WebSocket stream: one baseline on joining, then changed fields.
 // Metres use 0.1 mm precision. Static identity/appearance never ride motion updates.
-const fields=['x','y','z','vx','vy','vz','yaw','cooldown','dashTime','hit','impacts','grab'] as const;
+const fields=['x','y','z','vx','vy','vz','yaw','cooldown','dashTime','hit','facility','phase','impacts','grab'] as const;
 type Value=number|unknown[]|null;
 type Row=[number,number,...Value[]];
 export type StatePacket={type:'state';tick:number;time:number;full:boolean;add:[number,string,Appearance][];remove:number[];change:Row[]};
 function values(p:Player,slots:Map<string,number>):Value[] {
   const q=(v:number)=>Math.round(v*10000);
   const g=p.grab;
-  return ([p.x,p.y,p.z,p.vx,p.vy,p.vz,p.yaw,p.cooldown,p.dashTime,p.hit].map(q) as Value[])
+  return ([p.x,p.y,p.z,p.vx,p.vy,p.vz,p.yaw,p.cooldown,p.dashTime,p.hit,p.facility,p.phase].map(q) as Value[])
     // updated is a server-only grab lease; it is deliberately not replicated.
     .concat([p.impacts.map(i=>[i.seq,q(i.nx),q(i.nz),q(i.speed),q(i.height),q(i.age)]),g?[slots.get(g.by)!,g.hand,q(g.anchor.x),q(g.anchor.y),q(g.anchor.z),q(g.target.x),q(g.target.y),q(g.target.z)]:null]);
 }
@@ -54,6 +54,7 @@ export class StateDecoder {
             p.grab={by:owner.id,hand:g[1] as -1|1,anchor:{x:g[2]/10000,y:g[3]/10000,z:g[4]/10000},target:{x:g[5]/10000,y:g[6]/10000,z:g[7]/10000},updated:0};
           }
         }else if(key==='impacts')p.impacts=(value as number[][]).map(v=>({seq:v[0],nx:v[1]/10000,nz:v[2]/10000,speed:v[3]/10000,height:v[4]/10000,age:v[5]/10000}));
+        else if(key==='facility')p.facility=Math.round((value as number)/10000);
         else p[key]=(value as number)/10000;
       }
       this.players.set(slot,p);

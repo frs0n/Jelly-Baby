@@ -16,6 +16,8 @@ export function releaseGrabs(players:Player[],id:string) {
 export function beginGrab(players:Player[],by:string,id:string,hit:Point,now:number) {
   const owner=players.find(p=>p.id===by),p=players.find(p=>p.id===id);
   if(!owner||!p||(owner.grab&&owner.grab.by!==by)||p.grab||players.some(p=>p.grab?.by===by))return false;
+  // A rider is held by the facility; nobody grabs them and they grab nobody.
+  if(owner.facility||p.facility)return false;
   if(by!==id&&distance(owner,p)>GRAB_REACH)return false;
   const center={x:p.x,y:p.y+.035,z:p.z};
   if(distance(center,hit)>.08)return false;

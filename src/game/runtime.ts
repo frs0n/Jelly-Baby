@@ -78,7 +78,7 @@ export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
   facilityShadows.update(renderer);
   optics.update(renderer,body,true);
   await transport.update();
-  playground=new Playground(scene,body,baby,input,palette=>{baby.setAppearance(palette);optics.setAbsorption(appearanceAbsorption(palette));},fail);
+  playground=new Playground(scene,body,baby,input,facilities,palette=>{baby.setAppearance(palette);optics.setAbsorption(appearanceAbsorption(palette));},fail);
   stage('Compiling the material');
   await renderer.compileAsync(scene,camera);
   stage('Drawing the first frame');
