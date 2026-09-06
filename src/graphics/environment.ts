@@ -12,7 +12,7 @@ export async function loadEnvironment(renderer:THREE.WebGPURenderer,scene:THREE.
   source.image.data=studio.data;source.needsUpdate=true;
   const lighting=measureWindow(studio);
   const pmrem=new THREE.PMREMGenerator(renderer);
-  const target=await pmrem.fromEquirectangularAsync(source);
+  const target=pmrem.fromEquirectangular(source);
   scene.environment=target.texture;scene.environmentIntensity=.9;
   return {...lighting,dispose:()=>{target.dispose();source.dispose();pmrem.dispose();}};
 }
