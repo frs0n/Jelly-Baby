@@ -38,11 +38,19 @@ export function parseBabyCage(buffer:ArrayBuffer,manifest:ModelManifest) {
   };
 }
 
+export type BabyModel={buffer:ArrayBuffer;manifest:ModelManifest};
+let model:Promise<BabyModel>|undefined;
+export function loadBabyModel():Promise<BabyModel> {
+  if(!model)model=(async()=>{
+    const [binary,metadata]=await Promise.all([
+      fetch(new URL('../assets/model/jelly-baby.bin',import.meta.url)),
+      fetch(new URL('../assets/model/jelly-baby.json',import.meta.url)),
+    ]);
+    if(!binary.ok||!metadata.ok)throw new Error('Could not load the reference jelly mesh');
+    return {buffer:await binary.arrayBuffer(),manifest:await metadata.json() as ModelManifest};
+  })();
+  return model;
+}
 export async function loadBabyCage() {
-  const [binary,metadata]=await Promise.all([
-    fetch(new URL('../assets/model/jelly-baby.bin',import.meta.url)),
-    fetch(new URL('../assets/model/jelly-baby.json',import.meta.url)),
-  ]);
-  if(!binary.ok||!metadata.ok)throw new Error('Could not load the reference jelly mesh');
-  return parseBabyCage(await binary.arrayBuffer(),await metadata.json() as ModelManifest);
+  const {buffer,manifest}=await loadBabyModel();return parseBabyCage(buffer,manifest);
 }

@@ -13,8 +13,8 @@ import { createRenderer, resizeView } from '../graphics/renderer.ts';
 import { OpticalTransport } from '../graphics/transport.ts';
 import { createComposite } from '../graphics/composite.ts';
 import { FixedStepper } from './fixed-step.ts';
-import { JELLY_FLAVORS } from '../graphics/jelly-flavors.ts';
-import { FlavorPicker } from './flavor-picker.ts';
+import { Playground } from '../multiplayer/playground.ts';
+import { appearanceAbsorption } from '../multiplayer/appearance.ts';
 
 export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
   stage('Starting WebGPU');
@@ -36,13 +36,11 @@ export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
   const table=await makeTable(optics,environment);scene.add(table.mesh);
   const composite=createComposite(renderer,scene,camera);
   const rig=new Locomotion(body);
-  const flavorPicker=new FlavorPicker(flavor=>{
-    baby.setFlavor(flavor);optics.setAbsorption(JELLY_FLAVORS[flavor].absorption);
-  });
+  let playground:Playground|undefined;
   rig.onContact=(speed,foot)=>sound.contact(speed,foot);
   const physicsClock=new FixedStepper(PHYS.step);
   let lastTime=0,disposed=false;
-  const reset=()=>{input.recenter();body.reset();baby.resetFace();physicsClock.reset();};
+  const reset=()=>{input.recenter();body.reset();baby.resetFace();physicsClock.reset();playground?.reset();};
   const input=new Input(camera,renderer.domElement,body,baby.mesh,rig,sound,reset);
   const transport=new OpticalTransport(optics,body,camera,environment.incoming,fail);
   const resize=()=>resizeView(renderer,camera,input.controls);
@@ -51,9 +49,7 @@ export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
     cancelAnimationFrame(resizeFrame);resizeFrame=requestAnimationFrame(resize);
   });
   resizeObserver.observe(document.querySelector('#viewport')!);resize();
-  document.querySelector('#reset')!.addEventListener('click',event=>{
-    reset();if((event as MouseEvent).detail>0)(event.currentTarget as HTMLButtonElement).blur();
-  });
+  document.querySelector('#reset')!.addEventListener('click',reset);
   document.querySelector('#sound')!.addEventListener('click',event=>{
     const muted=sound.toggle(),button=document.querySelector('#sound')!;
     button.setAttribute('aria-pressed',String(muted));button.setAttribute('aria-label',muted?'Enable sound':'Mute sound');
@@ -66,6 +62,7 @@ export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
   body.updateSurface();baby.update();input.update(1);
   optics.update(renderer,body,true);
   await transport.update();
+  playground=new Playground(scene,body,baby,input,palette=>{baby.setAppearance(palette);optics.setAbsorption(appearanceAbsorption(palette));},fail);
   stage('Compiling the material');
   await renderer.compileAsync(scene,camera);
   stage('Drawing the first frame');
@@ -73,16 +70,18 @@ export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
   // Fence first-frame GPU work so validation/OOM cannot masquerade as a successful boot.
   const backend=renderer.backend as unknown as {device:GPUDevice};
   await backend.device.queue.onSubmittedWorkDone();
+  playground.start();
   lastTime=performance.now();
   const frame=(time:number)=>{
     if(disposed)return;
     try {
       const dt=Math.min(.05,Math.max(0,(time-lastTime)/1000));lastTime=time;
       if(document.hidden){physicsClock.reset();return;}
-      const steps=physicsClock.advance(dt,()=>{
+      physicsClock.advance(dt,()=>{
         input.step(PHYS.step);rig.step(PHYS.step);body.step(PHYS.step);input.afterPhysicsStep();rig.afterStep();
       });
-      if(steps&&body.surfaceDirty) {
+      playground?.update(dt);
+      if(body.surfaceDirty) {
         if(!body.isFinite())throw new Error('The soft-body simulation produced an invalid state');
         body.updateSurface();
       }
@@ -99,9 +98,9 @@ export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
   const dispose=()=>{
     if(disposed)return;disposed=true;
     void renderer.setAnimationLoop(null);input.dispose();sound.dispose();transport.dispose();resizeObserver.disconnect();cancelAnimationFrame(resizeFrame);
-    flavorPicker.dispose();composite.dispose();baby.dispose();table.dispose();environment.dispose();optics.dispose();renderer.dispose();
+    playground?.dispose();composite.dispose();baby.dispose();table.dispose();environment.dispose();optics.dispose();renderer.dispose();
   };
   window.addEventListener('pagehide',event=>{if(!event.persisted)dispose();});
   if(import.meta.hot)import.meta.hot.dispose(dispose);
-  return {stop:()=>{disposed=true;input.clear();flavorPicker.dispose();sound.dispose();transport.dispose();void renderer.setAnimationLoop(null);}};
+  return {stop:()=>{disposed=true;input.clear();playground?.dispose();sound.dispose();transport.dispose();void renderer.setAnimationLoop(null);}};
 }

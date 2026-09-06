@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "jelly-baby-playground",
+  "main": "server/index.ts",
+  "compatibility_date": "2026-09-06",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {"directory": "./dist", "binding": "ASSETS", "run_worker_first": ["/api/*"]},
+  "durable_objects": {"bindings": [
+    {"name": "ROOMS", "class_name": "JellyRoom"},
+    {"name": "MATCHMAKER", "class_name": "Matchmaker"}
+  ]},
+  "migrations": [{"tag": "v1", "new_sqlite_classes": ["JellyRoom", "Matchmaker"]}],
+  "observability": {"enabled": true, "head_sampling_rate": 0.1}
+}

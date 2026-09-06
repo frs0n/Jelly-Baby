@@ -1,3 +1,5 @@
+import { colorJelly } from '../multiplayer/jelly-color.ts';
+import type { Appearance } from '../multiplayer/appearance.ts';
 import * as THREE from 'three/webgpu';
 import { attribute } from 'three/tsl';
 import { BabyFace } from './baby-face.ts';
@@ -37,6 +39,7 @@ export class Baby {
       THREE.LinearSRGBColorSpace,
     );
   }
+  setAppearance(palette:Appearance) {colorJelly(this.jellyMaterial,palette,this.body.center);}
   update(dt=0) { this.face.update(dt); }
   resetFace() { this.face.reset(); }
   dispose() {

@@ -21,6 +21,11 @@ type PointerGrab={
 
 export class Input {
   readonly controls:OrbitControls;
+  allowGrab=true;
+  externalGrab=false;
+  enabled=true;
+  onJump:()=>void=()=>{};
+  onDash:()=>void=()=>{};
   private keys=new Set<string>();
   private touchKeys=new Map<number,string>();
   private joystickPointer:number|null=null;
@@ -82,7 +87,8 @@ export class Input {
         e.preventDefault();void sound.unlock().catch(()=>{});button.setPointerCapture(e.pointerId);
         const code=button.dataset.control!;
         this.touchKeys.set(e.pointerId,code);button.classList.add('held');
-        if(code==='Space')rig.jump();
+        if(code==='Space'&&this.enabled){rig.jump();this.onJump();}
+        if(code==='ShiftLeft'&&this.enabled)this.onDash();
       },{signal});
       const release=(e:PointerEvent)=>{
         this.touchKeys.delete(e.pointerId);button.classList.remove('held');
@@ -137,6 +143,7 @@ export class Input {
     return false;
   }
   private begin=(e:PointerEvent)=>{
+    if(!this.allowGrab||!this.enabled)return;
     if(e.button!==0||this.grabs.has(e.pointerId)||this.body.grabs.length>=MAX_GRABS)return;
     // Only touch can add simultaneous grips; desktop mouse/pen keep one grip.
     if(this.body.grab&&(e.pointerType!=='touch'||[...this.grabs.values()].some(state=>state.pointerType!=='touch')))return;
@@ -171,7 +178,7 @@ export class Input {
         this.end(e);return;
       }
       e.preventDefault();e.stopImmediatePropagation();this.captureDragTarget(e,state);
-    } else if(!this.body.grab&&e.pointerType==='mouse') {
+    } else if(this.allowGrab&&!this.body.grab&&e.pointerType==='mouse') {
       this.eventRay(e);
       // Hover is only a cursor hint. Pointer-down resolves the exact visible
       // triangle through the refittable BVH, not a 144k-triangle linear scan.
@@ -192,7 +199,7 @@ export class Input {
     // Retain each released grip until physics consumes its final target sample.
   };
   private syncGrabControls() {
-    this.controls.enabled=this.body.grabs.length===0;
+    this.controls.enabled=this.body.grabs.length===0&&!this.externalGrab;
     this.canvas.classList.toggle('grabbing',[...this.grabs.values()].some(state=>!state.releasePending));
   }
   private finishRelease=(id?:number)=>{
@@ -213,7 +220,8 @@ export class Input {
     if(['KeyW','KeyA','KeyS','KeyD','ArrowUp','ArrowLeft','ArrowDown','ArrowRight','Space'].includes(e.code)) {
       e.preventDefault();this.keys.add(e.code);void this.sound.unlock().catch(()=>{});
     }
-    if(e.code==='Space'&&!e.repeat)this.rig.jump();
+    if(e.code==='Space'&&!e.repeat&&this.enabled){this.rig.jump();this.onJump();}
+    if((e.code==='ShiftLeft'||e.code==='ShiftRight')&&!e.repeat&&this.enabled){e.preventDefault();this.onDash();}
     if(e.code==='KeyR'&&!e.repeat)this.reset();
     if(e.code==='Escape')this.finishRelease();
   };
@@ -237,6 +245,7 @@ export class Input {
     return false;
   }
   step(h:number) {
+    if(!this.enabled||this.externalGrab){this.rig.move.set(0,0,0);return;}
     let x=Number(this.pressed('KeyD','ArrowRight'))-Number(this.pressed('KeyA','ArrowLeft'))+this.joystickX;
     let z=Number(this.pressed('KeyW','ArrowUp'))-Number(this.pressed('KeyS','ArrowDown'))+this.joystickZ;
     const inputLength=Math.hypot(x,z);
@@ -264,7 +273,7 @@ export class Input {
   update(dt:number) {
     // External resets must never leave pointer capture or orbit state wedged.
     for(const [id,state] of this.grabs)if(!this.body.grabs.includes(state.grab))this.finishRelease(id);
-    if(this.body.grab)return; // Freeze both orbit and translation for the entire grab.
+    if(this.body.grab||this.externalGrab)return; // Freeze both orbit and translation for the entire grab.
     const target=this.temp.copy(this.body.center);target.y=Math.max(.025,target.y);
     this.follow.lerp(target,1-Math.exp(-4.5*dt));
     this.temp.copy(this.follow).sub(this.controls.target);

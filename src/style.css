@@ -60,3 +60,7 @@ h2{font:italic 39px Georgia,serif;letter-spacing:-1.6px;font-weight:400;margin:0
 @media(max-width:220px){.flavor-menu{grid-template-columns:minmax(0,1fr);width:min(170px,calc(100vw - 24px))}.flavor-option{min-width:0}.flavor-option>span:last-child{min-width:0;overflow:hidden;text-overflow:ellipsis}}
 @media(max-height:480px) and (pointer:coarse){.masthead{top:16px}h1{font-size:29px;margin-top:7px}.eyebrow{display:none}.touch-controls{bottom:15px}.joystick{width:92px;height:92px}.joystick-track{inset:11px}.joystick-knob{width:40px;height:40px}.jump{width:65px;height:65px}}
 @media(prefers-reduced-motion:reduce){.jelly-mark{animation:none}#loading,.icon-button{transition:none}}
+
+.player-count{position:fixed;top:123px;left:clamp(25px,4.2vw,64px);font-size:10px;color:#414b3499;pointer-events:none;user-select:none}
+@media(max-width:700px),(pointer:coarse){.player-count{top:108px;left:24px}}
+@media(max-height:480px) and (pointer:coarse){.player-count{top:65px}}

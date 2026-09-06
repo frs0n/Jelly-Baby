@@ -1,0 +1,1 @@
+{"compilerOptions":{"target":"ES2023","module":"ESNext","moduleResolution":"bundler","lib":["ES2023"],"types":[],"strict":true,"allowImportingTsExtensions":true,"skipLibCheck":true,"noEmit":true},"include":["server/**/*.ts","worker-configuration.d.ts","src/multiplayer/simulation.ts"]}

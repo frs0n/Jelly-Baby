@@ -1,0 +1,73 @@
+import type { Point } from './grabs.ts';
+import type { Controls, Player, Snapshot } from './simulation.ts';
+
+/** Anonymous, ephemeral connection. No cookies, account, nickname or local storage. */
+export class RoomClient {
+  id='';room='';players:Player[]=[];connected=false;
+  sampleTime=0;
+  private clockOffset:number|null=null;
+  private rtt=0;
+  get snapshotAge(){return (performance.now()-this.lastState+this.rtt*.5)/1000;}
+  get serverNow(){return this.clockOffset===null?this.sampleTime:performance.now()-this.clockOffset;}
+  onState:(players:Player[])=>void=()=>{};
+  onError:(error:Error)=>void=()=>{};
+  onGrabResult:(target:string,accepted:boolean)=>void=()=>{};
+  private socket:WebSocket|undefined;
+  private generation=0;
+  private heartbeat:ReturnType<typeof setInterval>|undefined;
+  private timeout:ReturnType<typeof setTimeout>|undefined;
+  private pending:AbortController|undefined;
+  private lastState=0;
+  async join(change=false) {
+    const exclude=change?this.room:'';
+    this.close();const generation=this.generation;
+    const pending=new AbortController();this.pending=pending;
+    this.timeout=setTimeout(()=>{pending.abort();if(generation===this.generation){this.close();this.onError(new Error('Connection timed out'));}},12000);
+    try {
+      // Ordinary browser properties only: no canvas, font or audio probing.
+      const properties=[navigator.userAgent,navigator.language,navigator.languages.join(','),screen.width,screen.height,screen.colorDepth,navigator.hardwareConcurrency,navigator.maxTouchPoints,Intl.DateTimeFormat().resolvedOptions().timeZone];
+      const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(properties)));
+      const fingerprint=Array.from(new Uint8Array(digest),v=>v.toString(16).padStart(2,'0')).join('');
+      const response=await fetch(`/api/join?exclude=${encodeURIComponent(exclude)}`,{method:'POST',headers:{'X-Jelly-Fingerprint':fingerprint},signal:pending.signal});
+      if(!response.ok)throw new Error(`入场失败 (${response.status})`);
+      const seat=await response.json() as {room:string;ticket:string};
+      if(generation!==this.generation)return;
+      this.room=seat.room;
+      const url=new URL(`/api/room/${seat.room}`,location.href);url.protocol=location.protocol==='https:'?'wss:':'ws:';url.searchParams.set('ticket',seat.ticket);
+      const socket=new WebSocket(url);this.socket=socket;
+      socket.addEventListener('message',event=>{
+        if(generation!==this.generation)return;
+        const packet=JSON.parse(event.data) as Snapshot|{type:'welcome';id:string}|{type:'grab-result';target:string;accepted:boolean}|{type:'pong';t:number};
+        if(packet.type==='welcome') {
+          this.id=packet.id;this.connected=true;clearTimeout(this.timeout);this.lastState=performance.now();this.send({type:'ping',t:performance.now()});
+          this.heartbeat=setInterval(()=>{
+            if(performance.now()-this.lastState>8000){this.close();this.onError(new Error('Connection interrupted'));return;}
+            this.send({type:'ping',t:performance.now()});
+          },3000);
+        }else if(packet.type==='pong'){const sample=Math.max(0,performance.now()-packet.t);this.rtt=this.rtt?this.rtt*.8+sample*.2:sample;
+        }else if(packet.type==='grab-result') {this.onGrabResult(packet.target,packet.accepted);
+        }else if(packet.type==='state') {
+          this.lastState=performance.now();this.sampleTime=packet.time;const offset=this.lastState-packet.time;this.clockOffset=this.clockOffset===null?offset:Math.min(this.clockOffset+.1,offset);this.players=packet.players;this.onState(this.players);
+        }
+      });
+      socket.addEventListener('close',()=>{
+        if(generation!==this.generation)return;
+        this.close();this.onError(new Error('Connection closed'));
+      });
+      socket.addEventListener('error',()=>{
+        if(generation!==this.generation)return;
+        this.close();this.onError(new Error('Connection failed'));
+      });
+    }catch(error){if(generation===this.generation){this.close();this.onError(error instanceof Error?error:new Error('Connection failed'));}}
+  }
+  beginGrab(target:string,point:Point){this.send({type:'grab-start',target,point});}
+  moveGrab(point:Point){this.send({type:'grab-move',point});}
+  endGrab(){this.send({type:'grab-end'});}
+  reset(){this.send({type:'reset'});}
+  input(value:Controls){this.send({type:'input',...value});}
+  private send(packet:unknown){if(this.socket?.readyState===WebSocket.OPEN)this.socket.send(JSON.stringify(packet));}
+  close() {
+    this.generation++;this.pending?.abort();this.pending=undefined;clearTimeout(this.timeout);clearInterval(this.heartbeat);
+    this.socket?.close();this.socket=undefined;this.connected=false;this.clockOffset=null;this.rtt=0;this.id='';this.players=[];this.onState([]);
+  }
+}

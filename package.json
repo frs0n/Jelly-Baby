@@ -4,9 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "lint": "eslint src scripts eslint.config.js",
-    "typecheck": "tsc --noEmit",
+    "dev": "npm run build && wrangler dev",
+    "lint": "eslint src server scripts eslint.config.js",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.worker.json",
     "build:model": "node scripts/build-model.mjs",
     "build:kernel": "node scripts/build-kernel.mjs",
     "test:physics": "node --experimental-strip-types scripts/verify-physics.mjs",
@@ -14,16 +14,29 @@
     "test:performance": "node --experimental-strip-types scripts/verify-performance.mjs",
     "benchmark": "node --experimental-strip-types scripts/benchmark.mjs",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "dev:client": "vite",
+    "deploy": "npm run build && wrangler deploy",
+    "test:online": "node --experimental-strip-types scripts/verify-online.mjs",
+    "test:rooms": "wrangler deploy --dry-run --outdir work/worker && node scripts/verify-rooms.mjs",
+    "test:drag": "node --experimental-strip-types scripts/verify-drag-input.mjs",
+    "test:reconcile": "node --experimental-strip-types scripts/verify-reconcile.mjs",
+    "test:remote": "node --experimental-strip-types scripts/verify-remote-actor.mjs",
+    "test:impact": "node --experimental-strip-types scripts/verify-impact.mjs"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260906.1",
     "@eslint/js": "^10.0.1",
     "@types/delaunator": "^5.0.3",
     "@types/three": "^0.185.4",
+    "@types/ws": "^8.18.1",
     "eslint": "^10.9.1",
+    "miniflare": "^5.20260903.0-alpha",
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.68.0",
-    "vite": "^8.2.2"
+    "vite": "^8.2.2",
+    "wrangler": "^4.129.0",
+    "ws": "^8.21.3"
   },
   "dependencies": {
     "delaunator": "^5.1.0",

@@ -9,6 +9,9 @@ export class Locomotion {
   yaw=0;
   phase=0;
   private gaitWeight=0;
+  private impactAge=10;
+  private impactHold=0;
+  private impactRecovery=.7;
   grounded=false;
   private jumpQueued=false;
   private jumpCooldown=0;
@@ -23,11 +26,15 @@ export class Locomotion {
     this.body=body;
     for(let i=0;i<body.mass.length;i++) this.restCenter.addScaledVector(new Vector3().fromArray(body.rest,i*3),body.mass[i]/body.totalMass);
   }
+  stumble(speed:number) {
+    this.impactAge=0;this.impactHold=speed>.16?.45+Math.min(.35,speed):.06;
+    this.impactRecovery=speed>.16?1.15:.35;this.body.wake();
+  }
   jump() { this.jumpQueued=true; }
-  reset() { this.yaw=0; this.phase=0;this.gaitWeight=0;this.jumpCooldown=0; this.jumpQueued=false; this.move.set(0,0,0); }
+  reset() { this.impactAge=10;this.yaw=0; this.phase=0;this.gaitWeight=0;this.jumpCooldown=0; this.jumpQueued=false; this.move.set(0,0,0); }
   step(h:number) {
     const b=this.body, x=b.x, v=b.velocity;
-    this.elapsed+=h; this.jumpCooldown-=h;
+    this.elapsed+=h; this.jumpCooldown-=h;this.impactAge+=h;
     this.center.set(0,0,0); this.velocity.set(0,0,0);
     for(let i=0;i<b.mass.length;i++) {
       const j=i*3, w=b.mass[i]/b.totalMass;
@@ -36,12 +43,13 @@ export class Locomotion {
     }
     this.grounded=b.grounded;
     const speed=this.move.length();
-    b.canSleep=speed<.001&&!this.jumpQueued;
+    b.canSleep=speed<.001&&!this.jumpQueued&&this.impactAge>this.impactHold+this.impactRecovery;
     if(!b.canSleep)b.wake();
     if(b.sleeping)return;
-    if(b.grab) { this.releasedFor=0; this.jumpQueued=false; return; }
+    if(b.grabs.some(grip=>!grip.cosmetic)) { this.releasedFor=0; this.jumpQueued=false; return; }
     this.releasedFor+=h;
-    const recovery=Math.min(1,this.releasedFor/0.55);
+    const balance=Math.max(0,Math.min(1,(this.impactAge-this.impactHold)/this.impactRecovery));
+    const recovery=Math.min(1,this.releasedFor/0.55)*balance*balance*(3-2*balance);
     if(speed>.01) {
       const target=Math.atan2(this.move.x,this.move.z);
       const angle=Math.atan2(Math.sin(target-this.yaw),Math.cos(target-this.yaw));
