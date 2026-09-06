@@ -12,7 +12,7 @@ import { ABSORPTION } from '../src/graphics/baby.ts';
 
 const inputSource=readFileSync('src/game/input.ts','utf8');
 assert(!inputSource.includes('raycaster.intersectObject(this.mesh'), 'grab start must not scan the 144k visible triangles');
-assert(inputSource.includes('getCoalescedEvents')&&inputSource.includes("e?.type==='pointerup'"), 'abrupt pointer endpoints are latched before release');
+assert(inputSource.includes('getCoalescedEvents')&&/if\(e(?:\?)?\.type==='pointerup'\)this\.captureDragTarget\(e,state\)/.test(inputSource), 'abrupt pointer endpoints are latched before release');
 assert(!inputSource.includes('recoverGrabTarget'), 'grab commands must never be rewound after a hard step');
 
 const clock=new FixedStepper(PHYS.step);let ticks=0;

@@ -13,6 +13,8 @@ import { createRenderer, resizeView } from '../graphics/renderer.ts';
 import { OpticalTransport } from '../graphics/transport.ts';
 import { createComposite } from '../graphics/composite.ts';
 import { FixedStepper } from './fixed-step.ts';
+import { JELLY_FLAVORS } from '../graphics/jelly-flavors.ts';
+import { FlavorPicker } from './flavor-picker.ts';
 
 export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
   stage('Starting WebGPU');
@@ -34,6 +36,9 @@ export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
   const table=await makeTable(optics,environment);scene.add(table.mesh);
   const composite=createComposite(renderer,scene,camera);
   const rig=new Locomotion(body);
+  const flavorPicker=new FlavorPicker(flavor=>{
+    baby.setFlavor(flavor);optics.setAbsorption(JELLY_FLAVORS[flavor].absorption);
+  });
   rig.onContact=(speed,foot)=>sound.contact(speed,foot);
   const physicsClock=new FixedStepper(PHYS.step);
   let lastTime=0,disposed=false;
@@ -93,9 +98,9 @@ export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
   const dispose=()=>{
     if(disposed)return;disposed=true;
     void renderer.setAnimationLoop(null);input.dispose();sound.dispose();transport.dispose();resizeObserver.disconnect();cancelAnimationFrame(resizeFrame);
-    composite.dispose();baby.dispose();table.dispose();environment.dispose();optics.dispose();renderer.dispose();
+    flavorPicker.dispose();composite.dispose();baby.dispose();table.dispose();environment.dispose();optics.dispose();renderer.dispose();
   };
   window.addEventListener('pagehide',event=>{if(!event.persisted)dispose();});
   if(import.meta.hot)import.meta.hot.dispose(dispose);
-  return {stop:()=>{disposed=true;input.clear();sound.dispose();transport.dispose();void renderer.setAnimationLoop(null);}};
+  return {stop:()=>{disposed=true;input.clear();flavorPicker.dispose();sound.dispose();transport.dispose();void renderer.setAnimationLoop(null);}};
 }

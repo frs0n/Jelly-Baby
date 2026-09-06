@@ -205,7 +205,9 @@ function makeTarget(size,depthBuffer) {
  */
 class RefractiveLightField {
   constructor(surface,lightDirection,sigma) {
-    this.surface=surface;this.lightDirection=lightDirection.clone().normalize();this.sigma=sigma;
+    this.surface=surface;this.lightDirection=lightDirection.clone().normalize();
+    this.absorptionNode=uniform(new THREE.Vector3(-sigma[0],-sigma[1],-sigma[2]));
+    this.absorptionDirty=false;
     this.span=.22;this.origin=new THREE.Vector2();
     this.originNode=uniform(this.origin);this.spanNode=uniform(this.span);
 
@@ -340,7 +342,7 @@ class RefractiveLightField {
     const r0=((1-IOR)/(1+IOR))**2;
     const schlick=cosine=>float(1).sub(float(r0).add(float(1-r0).mul(float(1).sub(cosine).pow(5))));
     const transmission=schlick(entryCos).mul(schlick(exitCos));
-    const absorption=exp(vec3(-sigma[0],-sigma[1],-sigma[2]).mul(insideDistance));
+    const absorption=exp(this.absorptionNode.mul(insideDistance));
     // Keep the expensive optical path in the vertex stage. The fragment stage only
     // evaluates the area/Jacobian focus and interpolates this transmitted energy.
     const transmittedEnergy=absorption.mul(transmission).mul(select(valid,1,0)).toVarying();
@@ -363,8 +365,11 @@ class RefractiveLightField {
     this.resources={frontMaterial,backMaterial,grid,causticMaterial,blurMaterial};
     this.lastRevision=-1;this.lastCenter=new THREE.Vector3(Infinity,Infinity,Infinity);
   }
+  setAbsorption(sigma) {
+    this.absorptionNode.value.set(-sigma[0],-sigma[1],-sigma[2]);this.absorptionDirty=true;
+  }
   update(renderer,body,force=false) {
-    if(!force&&this.lastRevision===body.surfaceRevision&&this.lastCenter.distanceToSquared(body.center)<1e-14)return;
+    if(!force&&!this.absorptionDirty&&this.lastRevision===body.surfaceRevision&&this.lastCenter.distanceToSquared(body.center)<1e-14)return;
     this.lastRevision=body.surfaceRevision;this.lastCenter.copy(body.center);
     const x=body.x;
     for(let i=0,j=0;i<x.length;i+=3,j+=4){this.cagePacked[j]=x[i];this.cagePacked[j+1]=x[i+1];this.cagePacked[j+2]=x[i+2];this.cagePacked[j+3]=0;}
@@ -394,6 +399,7 @@ class RefractiveLightField {
     renderer.setRenderTarget(this.rawCausticTarget);renderer.render(this.causticScene,this.causticCamera);
     renderer.setRenderTarget(this.causticTarget);this.blurQuad.render(renderer);
     renderer.setRenderTarget(null);
+    this.absorptionDirty=false;
   }
   dispose() {
     this.frontTarget.dispose();this.backTarget.dispose();this.rawCausticTarget.dispose();this.causticTarget.dispose();

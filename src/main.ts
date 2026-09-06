@@ -1,4 +1,5 @@
 import './style.css';
+import { flavorPickerMarkup } from './game/flavor-picker.ts';
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML=`
   <main id="viewport" aria-label="Jelly baby playground"></main>
@@ -10,6 +11,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML=`
     <button id="reset" class="icon-button" aria-label="Reset jelly baby" title="Reset · R">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4.5 8a8 8 0 1 1-.1 8M4 3v6h6"/></svg>
     </button>
+    ${flavorPickerMarkup()}
   </nav>
   <footer class="desktop-hints" aria-label="Keyboard controls">
     <span><kbd>W</kbd><span class="key-row"><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span></span><span class="hint-label">wander</span>

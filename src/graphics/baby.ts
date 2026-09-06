@@ -3,24 +3,27 @@ import { attribute } from 'three/tsl';
 import { SurfaceBVH } from './refractive-light.js';
 import type { SoftBody } from '../physics/soft-body.js';
 import { refinePatch } from './surface-details.ts';
+import { DEFAULT_JELLY_FLAVOR, JELLY_FLAVORS, type JellyFlavorName } from './jelly-flavors.ts';
 
-export const ABSORPTION=[48,3.2,85];
+export const ABSORPTION=JELLY_FLAVORS[DEFAULT_JELLY_FLAVOR].absorption;
 type Binding={weights:[number,number][]; offset:number; face:number[]; bary:number[]};
 
 export class Baby {
   readonly mesh:THREE.Mesh;
   readonly group=new THREE.Group();
   private details:{mesh:THREE.Mesh; bindings:Binding[]}[]=[];
+  private readonly jellyMaterial:THREE.MeshPhysicalNodeMaterial;
   readonly body:SoftBody;
   constructor(body:SoftBody) {
     this.body=body;
     const material=new THREE.MeshPhysicalNodeMaterial({
-      color:'#eaffd4',roughness:.085,metalness:0,transmission:1,thickness:.035,
+      color:JELLY_FLAVORS[DEFAULT_JELLY_FLAVOR].surface,roughness:.085,metalness:0,transmission:1,thickness:.035,
       ior:1.35,dispersion:.025,attenuationDistance:.035,
       clearcoat:.42,clearcoatRoughness:.05,envMapIntensity:1.05,
       transparent:false,side:THREE.FrontSide,flatShading:false,
     });
-    material.attenuationColor.setRGB(Math.exp(-ABSORPTION[0]*.035),Math.exp(-ABSORPTION[1]*.035),Math.exp(-ABSORPTION[2]*.035),THREE.LinearSRGBColorSpace);
+    this.jellyMaterial=material;
+    this.setFlavor(DEFAULT_JELLY_FLAVOR);
     material.thicknessNode=attribute('opticalThickness','float');
     this.mesh=new THREE.Mesh(body.surface.geometry,material);
     this.mesh.renderOrder=1;
@@ -67,6 +70,14 @@ export class Baby {
     const lip=new THREE.Shape();lip.absellipse(0,0,.0024,.00125,0,Math.PI*2,false,0);
     add(refinePatch(new THREE.ShapeGeometry(lip,24)),tongue,0,.0368,.00028);
     this.update();
+  }
+  setFlavor(flavor:JellyFlavorName) {
+    const look=JELLY_FLAVORS[flavor],distance=this.jellyMaterial.attenuationDistance;
+    this.jellyMaterial.color.set(look.surface);
+    this.jellyMaterial.attenuationColor.setRGB(
+      Math.exp(-look.absorption[0]*distance),Math.exp(-look.absorption[1]*distance),Math.exp(-look.absorption[2]*distance),
+      THREE.LinearSRGBColorSpace,
+    );
   }
   update() {
     const x=this.body.x,n=this.body.surface.geometry.attributes.normal.array;
