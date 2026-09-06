@@ -20,6 +20,9 @@ type PointerGrab={
 };
 
 export class Input {
+  /** Facilities temporarily own the body while orbit controls remain available. */
+  bodyControlled:()=>boolean=()=>false;
+  facilityCameraDistance:()=>number|undefined=()=>undefined;
   readonly controls:OrbitControls;
   private keys=new Set<string>();
   private touchKeys=new Map<number,string>();
@@ -82,7 +85,7 @@ export class Input {
         e.preventDefault();void sound.unlock().catch(()=>{});button.setPointerCapture(e.pointerId);
         const code=button.dataset.control!;
         this.touchKeys.set(e.pointerId,code);button.classList.add('held');
-        if(code==='Space')rig.jump();
+        if(code==='Space'&&!this.bodyControlled())rig.jump();
       },{signal});
       const release=(e:PointerEvent)=>{
         this.touchKeys.delete(e.pointerId);button.classList.remove('held');
@@ -137,6 +140,7 @@ export class Input {
     return false;
   }
   private begin=(e:PointerEvent)=>{
+    if(this.bodyControlled())return;
     if(e.button!==0||this.grabs.has(e.pointerId)||this.body.grabs.length>=MAX_GRABS)return;
     // Only touch can add simultaneous grips; desktop mouse/pen keep one grip.
     if(this.body.grab&&(e.pointerType!=='touch'||[...this.grabs.values()].some(state=>state.pointerType!=='touch')))return;
@@ -213,7 +217,7 @@ export class Input {
     if(['KeyW','KeyA','KeyS','KeyD','ArrowUp','ArrowLeft','ArrowDown','ArrowRight','Space'].includes(e.code)) {
       e.preventDefault();this.keys.add(e.code);void this.sound.unlock().catch(()=>{});
     }
-    if(e.code==='Space'&&!e.repeat)this.rig.jump();
+    if(e.code==='Space'&&!e.repeat&&!this.bodyControlled())this.rig.jump();
     if(e.code==='KeyR'&&!e.repeat)this.reset();
     if(e.code==='Escape')this.finishRelease();
   };
@@ -237,6 +241,7 @@ export class Input {
     return false;
   }
   step(h:number) {
+    if(this.bodyControlled()){this.rig.move.set(0,0,0);return;}
     let x=Number(this.pressed('KeyD','ArrowRight'))-Number(this.pressed('KeyA','ArrowLeft'))+this.joystickX;
     let z=Number(this.pressed('KeyW','ArrowUp'))-Number(this.pressed('KeyS','ArrowDown'))+this.joystickZ;
     const inputLength=Math.hypot(x,z);
@@ -262,6 +267,7 @@ export class Input {
     }
   }
   update(dt:number) {
+    this.controls.minDistance=this.facilityCameraDistance()??.135;
     // External resets must never leave pointer capture or orbit state wedged.
     for(const [id,state] of this.grabs)if(!this.body.grabs.includes(state.grab))this.finishRelease(id);
     if(this.body.grab)return; // Freeze both orbit and translation for the entire grab.

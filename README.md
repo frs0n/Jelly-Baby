@@ -83,12 +83,42 @@ shared RGB ray paths, a finite ray grid, one measured window direction, a planar
 discontinuities. The simulation has no self-collision or tearing. The character
 uses powered posture forces to stand and walk.
 
+## Facilities
+
+The miniature swing sits beside spawn. Walk nearby to see **Press E to Play
+Swing** on desktop or **Play Swing** on touch layouts. The same action gets off
+onto the clear approach side. Walking, jumping, and grabbing hand control to the
+facility during play; the camera can still orbit. Reset restores both the baby
+and the facilities.
+
+To add another facility, implement `Facility` in `src/game/facilities.ts` and
+register it with `facilities.add(...)` in the runtime. Give it a unique `id`, a
+short `label`, and an `interactionDistance` (return `Infinity` when unavailable).
+The shared manager selects the nearest available facility, gives the active
+facility exclusive interaction ownership, and supplies desktop/touch prompts,
+control handoff, optional laughter and camera distance, fixed physics steps,
+post-physics contact handling, visual updates, reset, and disposal. Keep geometry
+and simulation in separate modules, as demonstrated by `SwingFacility`, `Swing`,
+and `SwingPhysics`. An active facility owns the body's posture forces; inactive
+facilities can continue simulating, such as an empty swing coasting.
+
+The swing uses a nonlinear pendulum with damping, phase-aligned energy input,
+and a bounded 49-degree arc. Compliant nodal forces couple the jelly to the seat;
+its original FEM solver still supplies elastic deformation and volume retention.
+This is a driven pendulum approximation, not a rope or fully coupled multibody
+solver. `FacilityShadows` projects the full opaque facility geometry along the
+measured window direction into a cached, fixed-world mask sampled directly by
+the table. Register future facilities with a world-space bounding box covering
+their full motion envelope. This avoids transparent ground overlays and keeps
+idle shadows stable; moving parts invalidate the cached mask automatically.
+
 ## Verification
 
 ```sh
 npm run lint
 npm run typecheck
 npm run test:physics
+npm run test:swing
 npm run test:performance
 npm run build
 ```

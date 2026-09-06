@@ -32,7 +32,7 @@ export async function createRenderer(fail:(e:unknown)=>void) {
   renderer.outputColorSpace=THREE.SRGBColorSpace;
   renderer.toneMapping=THREE.AgXToneMapping;renderer.toneMappingExposure=1.05;
   renderer.domElement.tabIndex=0;
-  renderer.domElement.setAttribute('aria-label','Jelly baby. Use the touch joystick or WASD to walk, Space to jump. Drag the baby to stretch; drag the table to orbit.');
+  renderer.domElement.setAttribute('aria-label','Jelly baby. Use the touch joystick or WASD to walk, Space to jump. Press E or use the Play button near a facility; use the same action to get off. Drag the baby to stretch; drag the table to orbit.');
   return renderer;
 }
 

@@ -49,8 +49,8 @@ export class BabyFace {
     add(refinePatch(new THREE.ShapeGeometry(lip,24)),tongue,0,.0368,.00028,'tongue');
   }
   reset() { this.expression.reset(); }
-  update(dt:number) {
-    this.expression.update(dt,this.body.grabs.length>0);
+  update(dt:number,playing=false) {
+    this.expression.update(dt,this.body.grabs.length>0,playing);
     const {sob,laugh,blink,time}=this.expression;
     const version=this.body.surface.geometry.attributes.position.version;
     if(version===this.surfaceVersion&&blink===this.lastBlink&&sob===this.lastSob&&laugh===this.lastLaugh&&sob===0&&laugh===0)return;
