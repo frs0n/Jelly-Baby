@@ -15,14 +15,14 @@ export class FaceExpression {
     this.held=false;this.heldFor=0;this.releaseFor=10;
     this.blinkAt=2.4;this.blinkFor=-1;this.doubleBlink=false;
   }
-  update(dt:number,grabbed:boolean) {
+  update(dt:number,grabbed:boolean,playing=false) {
     dt=Math.min(.05,Math.max(0,dt));this.time+=dt;
     if(this.held&&!grabbed&&this.heldFor>.12)this.releaseFor=0;
     this.heldFor=grabbed?this.heldFor+dt:0;this.held=grabbed;
     this.releaseFor+=dt;
     this.sob+=((grabbed?1:0)-this.sob)*(1-Math.exp(-dt*(grabbed?10:7)));
     // A little breath after release, then buoyant chuckles, then home.
-    const laughTarget=!grabbed&&this.releaseFor>.22&&this.releaseFor<1.65
+    const laughTarget=playing?1:!grabbed&&this.releaseFor>.22&&this.releaseFor<1.65
       ?Math.sin(Math.PI*(this.releaseFor-.22)/1.43):0;
     this.laugh+=(laughTarget-this.laugh)*(1-Math.exp(-12*dt));
     if(this.sob<.0001)this.sob=0;if(this.laugh<.0001)this.laugh=0;
@@ -40,4 +40,3 @@ export class FaceExpression {
     }
   }
 }
-

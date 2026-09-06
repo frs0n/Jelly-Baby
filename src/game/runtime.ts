@@ -15,6 +15,10 @@ import { createComposite } from '../graphics/composite.ts';
 import { FixedStepper } from './fixed-step.ts';
 import { Playground } from '../multiplayer/playground.ts';
 import { appearanceAbsorption } from '../multiplayer/appearance.ts';
+import { Facilities } from './facilities.ts';
+import { SwingFacility } from './swing-facility.ts';
+import { FacilityShadows } from '../graphics/facility-shadows.ts';
+import { TrampolineFacility } from './trampoline-facility.ts';
 
 export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
   const probe=import.meta.env.DEV&&new URLSearchParams(location.search).has('profile')?(await import('./performance-probe.ts')).createProbe():null;
@@ -34,15 +38,25 @@ export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
   const body=new SoftBody(await loadBabyCage());
   const baby=new Baby(body);scene.add(baby.group);
   const optics=new RefractiveLightField(body.cage.opticalSurface,environment.incoming,ABSORPTION);
-  const table=await makeTable(optics,environment);scene.add(table.mesh);
+  const facilityShadows=new FacilityShadows(environment.incoming);
+  const table=await makeTable(optics,environment,facilityShadows);scene.add(table.mesh);
   const composite=createComposite(renderer,scene,camera);
   const rig=new Locomotion(body);
   let playground:Playground|undefined;
+  const facilities=new Facilities();
+  facilities.add(new SwingFacility(scene,body,facilityShadows,sound.facility));
+  facilities.add(new TrampolineFacility(scene,body,facilityShadows,sound.facility));
   rig.onContact=(speed,foot)=>sound.contact(speed,foot);
   const physicsClock=new FixedStepper(PHYS.step);
   let lastTime=0,disposed=false;
-  const reset=()=>{input.recenter();body.reset();baby.resetFace();physicsClock.reset();playground?.reset();};
+  const reset=()=>{
+    sound.stopFacilities();facilities.reset();input.recenter();body.reset();
+    baby.resetFace();physicsClock.reset();playground?.reset();
+  };
   const input=new Input(camera,renderer.domElement,body,baby.mesh,rig,sound,reset);
+  input.bodyControlled=()=>!!facilities.active;
+  input.facilityCameraDistance=()=>facilities.active?.cameraDistance;
+  facilities.onInteract=()=>{input.clear();rig.reset();void sound.unlock().catch(()=>{});};
   const transport=new OpticalTransport(optics,body,camera,environment.incoming,fail);
   const resize=()=>resizeView(renderer,camera,input.controls);
   let resizeFrame=0;
@@ -61,6 +75,7 @@ export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
   // Let contact establish itself before displaying the first frame.
   for(let i=0;i<80;i++){rig.step(PHYS.step);body.step(PHYS.step);}
   body.updateSurface();baby.update();input.update(1);
+  facilityShadows.update(renderer);
   optics.update(renderer,body,true);
   await transport.update();
   playground=new Playground(scene,body,baby,input,palette=>{baby.setAppearance(palette);optics.setAbsorption(appearanceAbsorption(palette));},fail);
@@ -80,7 +95,10 @@ export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
       const dt=Math.min(.05,Math.max(0,(time-lastTime)/1000));lastTime=time;
       if(document.hidden){physicsClock.reset();return;}
       physicsClock.advance(dt,()=>{
-        input.step(PHYS.step);rig.step(PHYS.step);body.step(PHYS.step);input.afterPhysicsStep();rig.afterStep();
+        input.step(PHYS.step);facilities.step(PHYS.step);
+        if(!facilities.active)rig.step(PHYS.step);
+        body.step(PHYS.step);facilities.afterStep();input.afterPhysicsStep();
+        if(!facilities.active)rig.afterStep();
       });
       probe?.mark('physics');
       playground?.update(dt);
@@ -90,9 +108,11 @@ export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
         body.updateSurface();
       }
       probe?.mark('surface');
-      baby.update(dt);
+      facilities.update();baby.update(dt,facilities.active?.laughing??false);
+      facilityShadows.update(renderer);
       probe?.mark('face');
       input.update(dt);
+      sound.listen(camera);
       transport.follow();
       optics.update(renderer,body);
       table.mesh.position.x=body.center.x;table.mesh.position.z=body.center.z;
@@ -106,9 +126,13 @@ export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
   const dispose=()=>{
     if(disposed)return;disposed=true;probe?.dispose();
     void renderer.setAnimationLoop(null);input.dispose();sound.dispose();transport.dispose();resizeObserver.disconnect();cancelAnimationFrame(resizeFrame);
-    playground?.dispose();composite.dispose();baby.dispose();table.dispose();environment.dispose();optics.dispose();renderer.dispose();
+    playground?.dispose();facilities.dispose();facilityShadows.dispose();
+    composite.dispose();baby.dispose();table.dispose();environment.dispose();optics.dispose();renderer.dispose();
   };
   window.addEventListener('pagehide',event=>{if(!event.persisted)dispose();});
   if(import.meta.hot)import.meta.hot.dispose(dispose);
-  return {stop:()=>{disposed=true;input.clear();playground?.dispose();sound.dispose();transport.dispose();void renderer.setAnimationLoop(null);}};
+  return {stop:()=>{
+    disposed=true;input.clear();playground?.dispose();facilities.dispose();facilityShadows.dispose();
+    sound.dispose();transport.dispose();void renderer.setAnimationLoop(null);
+  }};
 }

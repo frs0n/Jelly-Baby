@@ -1,0 +1,84 @@
+{
+  "jelly_baby_multicolor.3mf": {
+    "ok": true,
+    "geometries": 9,
+    "bounds_mm": [
+      [
+        -48.925,
+        0.0,
+        -28.933
+      ],
+      [
+        48.925,
+        70.0,
+        30.026
+      ]
+    ]
+  },
+  "jelly_baby_full_geometry.stl": {
+    "ok": true,
+    "vertices": 82058,
+    "triangles": 164080,
+    "bounds_mm": [
+      [
+        -48.925,
+        0.0,
+        -28.933
+      ],
+      [
+        48.925,
+        70.0,
+        30.026
+      ]
+    ]
+  },
+  "jelly_baby_vertex_color.ply": {
+    "ok": true,
+    "vertices": 82058,
+    "triangles": 164080,
+    "bounds_mm": [
+      [
+        -48.925,
+        0.0,
+        -28.933
+      ],
+      [
+        48.925,
+        70.0,
+        30.026
+      ]
+    ]
+  },
+  "jelly_baby_multicolor.obj": {
+    "ok": true,
+    "geometries": 5,
+    "bounds_mm": [
+      [
+        -48.925,
+        0.0,
+        -28.933
+      ],
+      [
+        48.925,
+        70.0,
+        30.026
+      ]
+    ]
+  },
+  "jelly_baby_preview.glb": {
+    "ok": true,
+    "geometries": 9,
+    "bounds_mm": [
+      [
+        -48.925,
+        0.0,
+        -28.933
+      ],
+      [
+        48.925,
+        70.0,
+        30.026
+      ]
+    ]
+  }
+}

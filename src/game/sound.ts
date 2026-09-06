@@ -1,3 +1,5 @@
+import type { PerspectiveCamera } from 'three/webgpu';
+import { FacilityAudio, type FacilitySoundEvent } from './facility-sound.ts';
 type AudioWindow=Window&{webkitAudioContext?:typeof AudioContext};
 
 export class JellySound {
@@ -6,6 +8,8 @@ export class JellySound {
   private compressor:DynamicsCompressorNode|null=null;
   private resumePromise:Promise<void>|null=null;
   private outputPrimed=false;
+  private facilities:FacilityAudio|null=null;
+  private listener={x:0,y:.12,z:.19,rightX:1,rightZ:0};
   private abort=new AbortController();
   muted=false;
   constructor() {
@@ -13,6 +17,7 @@ export class JellySound {
     window.addEventListener('pointerdown',this.unlockFromGesture,{signal});
     window.addEventListener('touchstart',this.unlockFromGesture,{passive:true,signal});
     window.addEventListener('keydown',this.unlockFromGesture,{signal});
+    document.addEventListener('visibilitychange',()=>{if(document.hidden)this.stopFacilities();},{signal});
   }
   private unlockFromGesture=()=>{void this.unlock().catch(()=>{});};
   private createContext() {
@@ -26,6 +31,7 @@ export class JellySound {
       compressor.threshold.value=-14;compressor.ratio.value=5;
       master.connect(compressor).connect(context.destination);
       this.context=context;this.master=master;this.compressor=compressor;
+      this.facilities=new FacilityAudio(context,master);
       return context;
     } catch {
       if(context&&context.state!=='closed')void context.close().catch(()=>{});
@@ -51,9 +57,20 @@ export class JellySound {
   }
   toggle() {
     this.muted=!this.muted;
+    if(this.muted)this.stopFacilities();
     if(this.context&&this.master) this.master.gain.setTargetAtTime(this.muted?0:.62,this.context.currentTime,.025);
     return this.muted;
   }
+  listen(camera:PerspectiveCamera) {
+    const {x,y,z}=camera.position,e=camera.matrixWorld.elements;
+    this.listener={x,y,z,rightX:e[0],rightZ:e[2]};
+  }
+  facility=(event:FacilitySoundEvent)=>{
+    if(this.muted||document.hidden)return;
+    const l=this.listener,dx=event.x-l.x,dy=event.y-l.y,dz=event.z-l.z,distance=Math.hypot(dx,dy,dz);
+    this.facilities?.play(event,distance,(dx*l.rightX+dz*l.rightZ)/Math.max(.12,distance));
+  };
+  stopFacilities() {this.facilities?.stop();}
   contact(speed:number,foot:boolean) {
     const ctx=this.context, out=this.master;
     if(!ctx||!out||ctx.state==='closed'||this.muted) return;
@@ -78,6 +95,7 @@ export class JellySound {
     noise.onended=()=>{noise.disconnect();filter.disconnect();gain.disconnect();};
   }
   dispose() {
+    this.facilities?.dispose();this.facilities=null;
     this.abort.abort();this.master?.disconnect();this.compressor?.disconnect();
     const context=this.context;this.context=null;this.master=null;this.compressor=null;this.resumePromise=null;
     if(context&&context.state!=='closed')void context.close().catch(()=>{});
