@@ -1,5 +1,6 @@
 import type { Point } from './grabs.ts';
-import type { Controls, Player, Snapshot } from './simulation.ts';
+import { StateDecoder, type StatePacket } from './protocol.ts';
+import type { Controls, Player } from './simulation.ts';
 
 /** Anonymous, ephemeral connection. No cookies, account, nickname or local storage. */
 export class RoomClient {
@@ -7,6 +8,9 @@ export class RoomClient {
   sampleTime=0;
   private clockOffset:number|null=null;
   private rtt=0;
+  private decoder=new StateDecoder();
+  private lastInput='';private inputAt=-Infinity;
+  private lastGrab='';private grabAt=-Infinity;
   get snapshotAge(){return (performance.now()-this.lastState+this.rtt*.5)/1000;}
   get serverNow(){return this.clockOffset===null?this.sampleTime:performance.now()-this.clockOffset;}
   onState:(players:Player[])=>void=()=>{};
@@ -37,7 +41,7 @@ export class RoomClient {
       const socket=new WebSocket(url);this.socket=socket;
       socket.addEventListener('message',event=>{
         if(generation!==this.generation)return;
-        const packet=JSON.parse(event.data) as Snapshot|{type:'welcome';id:string}|{type:'grab-result';target:string;accepted:boolean}|{type:'pong';t:number};
+        const packet=JSON.parse(event.data) as StatePacket|{type:'welcome';id:string}|{type:'grab-result';target:string;accepted:boolean}|{type:'pong';t:number};
         if(packet.type==='welcome') {
           this.id=packet.id;this.connected=true;clearTimeout(this.timeout);this.lastState=performance.now();this.send({type:'ping',t:performance.now()});
           this.heartbeat=setInterval(()=>{
@@ -47,7 +51,7 @@ export class RoomClient {
         }else if(packet.type==='pong'){const sample=Math.max(0,performance.now()-packet.t);this.rtt=this.rtt?this.rtt*.8+sample*.2:sample;
         }else if(packet.type==='grab-result') {this.onGrabResult(packet.target,packet.accepted);
         }else if(packet.type==='state') {
-          this.lastState=performance.now();this.sampleTime=packet.time;const offset=this.lastState-packet.time;this.clockOffset=this.clockOffset===null?offset:Math.min(this.clockOffset+.1,offset);this.players=packet.players;this.onState(this.players);
+          this.lastState=performance.now();this.sampleTime=packet.time;const offset=this.lastState-packet.time;this.clockOffset=this.clockOffset===null?offset:Math.min(this.clockOffset+.1,offset);this.players=this.decoder.decode(packet).players;this.onState(this.players);
         }
       });
       socket.addEventListener('close',()=>{
@@ -60,13 +64,22 @@ export class RoomClient {
       });
     }catch(error){if(generation===this.generation){this.close();this.onError(error instanceof Error?error:new Error('Connection failed'));}}
   }
-  beginGrab(target:string,point:Point){this.send({type:'grab-start',target,point});}
-  moveGrab(point:Point){this.send({type:'grab-move',point});}
+  beginGrab(target:string,point:Point){this.lastGrab='';this.grabAt=-Infinity;this.send({type:'grab-start',target,point});}
+  moveGrab(point:Point){
+    const p={x:Math.round(point.x*10000)/10000,y:Math.round(point.y*10000)/10000,z:Math.round(point.z*10000)/10000},key=JSON.stringify(p),now=performance.now();
+    if(key===this.lastGrab&&now-this.grabAt<200)return;
+    if(this.send({type:'grab-move',point:p})){this.lastGrab=key;this.grabAt=now;}
+  }
   endGrab(){this.send({type:'grab-end'});}
-  reset(){this.send({type:'reset'});}
-  input(value:Controls){this.send({type:'input',...value});}
-  private send(packet:unknown){if(this.socket?.readyState===WebSocket.OPEN)this.socket.send(JSON.stringify(packet));}
+  reset(){this.lastInput='';this.inputAt=-Infinity;this.send({type:'reset'});}
+  input(value:Controls){
+    const key=JSON.stringify(value),now=performance.now();
+    if(!value.jump&&!value.dash&&key===this.lastInput&&now-this.inputAt<200)return;
+    if(this.send({type:'input',...value})){this.lastInput=key;this.inputAt=now;}
+  }
+  private send(packet:unknown){if(this.socket?.readyState!==WebSocket.OPEN)return false;this.socket.send(JSON.stringify(packet));return true;}
   close() {
+    this.decoder=new StateDecoder();this.lastInput=this.lastGrab='';this.inputAt=this.grabAt=-Infinity;
     this.generation++;this.pending?.abort();this.pending=undefined;clearTimeout(this.timeout);clearInterval(this.heartbeat);
     this.socket?.close();this.socket=undefined;this.connected=false;this.clockOffset=null;this.rtt=0;this.id='';this.players=[];this.onState([]);
   }

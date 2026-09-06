@@ -1,14 +1,15 @@
+import { StateEncoder } from '../src/multiplayer/protocol.ts';
 import { beginGrab, moveGrab, releaseGrabs, expireGrabs, point } from '../src/multiplayer/grabs.ts';
 import { paletteFromDigest, type Appearance } from '../src/multiplayer/appearance.ts';
 import { DurableObject } from 'cloudflare:workers';
 import { CAPACITY, STEP, controls, simulate, spawn, type Controls, type Player } from '../src/multiplayer/simulation.ts';
 
-type Session={player:Player;input:Controls;seen:number;budget:number;budgetTime:number};
+type Session={player:Player;input:Controls;seen:number;budget:number;budgetTime:number;inputTime:number};
 export class JellyRoom extends DurableObject<Env> {
   private sessions=new Map<WebSocket,Session>();
   private timer:ReturnType<typeof setInterval>|undefined;
   private tick=0;
-  private previousState="";
+  private encoder=new StateEncoder();
   private lastBroadcast=0;
   // Reservations persist until consumed so an idle room may safely hibernate.
   reserve(appearance:Appearance) {
@@ -28,7 +29,7 @@ export class JellyRoom extends DurableObject<Env> {
     if(this.sessions.size>=CAPACITY)return new Response('Table full',{status:409});
     const pair=new WebSocketPair(),client=pair[0],socket=pair[1];socket.accept();
     const player=spawn(crypto.randomUUID(),[...this.sessions.values()].map(s=>s.player),JSON.parse(String(seat[0].appearance)) as Appearance);
-    const s:Session={player,input:{x:0,z:0,jump:false,dash:false},seen:Date.now(),budget:80,budgetTime:Date.now()};
+    const s:Session={player,input:{x:0,z:0,jump:false,dash:false},seen:Date.now(),budget:80,budgetTime:Date.now(),inputTime:Date.now()};
     this.sessions.set(socket,s);
     socket.addEventListener('message',e=>{
       const now=Date.now();s.budget=Math.min(80,s.budget+(now-s.budgetTime)*.09);s.budgetTime=now;
@@ -38,7 +39,7 @@ export class JellyRoom extends DurableObject<Env> {
       if(!data||typeof data!=='object'){socket.close(1008,'Invalid command');this.leave(socket);return;}
       if(data.type==='input') {
         const input=controls(data);if(!input){socket.close(1008,'Invalid input');this.leave(socket);return;}
-        input.jump ||= s.input.jump;input.dash ||= s.input.dash;s.input=input;
+        s.inputTime=now;input.jump ||= s.input.jump;input.dash ||= s.input.dash;s.input=input;
       }else if(data.type==='grab-start') {
         const hit=point(data.point);
         if(!hit||typeof data.target!=='string'||data.target.length>36){socket.close(1008,'Invalid grab');this.leave(socket);return;}
@@ -61,7 +62,7 @@ export class JellyRoom extends DurableObject<Env> {
     });
     socket.addEventListener('close',()=>this.leave(socket));socket.addEventListener('error',()=>this.leave(socket));
     socket.send(JSON.stringify({type:'welcome',id:player.id,capacity:CAPACITY}));
-    this.broadcast();
+    this.broadcast(true);
     // Real-time physics needs a live timer; stop it as soon as the last player leaves.
     if(!this.timer)this.timer=setInterval(()=>this.advance(),STEP*1000);
     return new Response(null,{status:101,webSocket:client});
@@ -77,18 +78,18 @@ export class JellyRoom extends DurableObject<Env> {
     const now=Date.now();
     for(const [ws,s] of this.sessions) {
       if(now-s.seen>15000){ws.close(1001,'Inactive');this.leave(ws);}
-      else if(now-s.seen>350)s.input={x:0,z:0,jump:false,dash:false};
+      else if(now-s.inputTime>350)s.input={x:0,z:0,jump:false,dash:false};
     }
     expireGrabs(this.players(),now);
     simulate([...this.sessions.values()].map(s=>s.player),new Map([...this.sessions.values()].map(s=>[s.player.id,s.input])));
     this.tick++;if(this.tick%2===0)this.broadcast();
   }
-  private broadcast() {
+  private broadcast(full=false) {
     const now=Date.now();
-    const players=JSON.stringify(this.players(),(_key,value)=>typeof value==='number'?Math.round(value*100000)/100000:value);
-    if(players===this.previousState&&now-this.lastBroadcast<1000)return;
-    this.previousState=players;this.lastBroadcast=now;
-    const packet=`{"type":"state","tick":${this.tick},"time":${now},"players":${players}}`;
+    const state=this.encoder.encode(this.players(),this.tick,now,full);
+    if(!full&&!state.add.length&&!state.remove.length&&!state.change.length&&now-this.lastBroadcast<1000)return;
+    this.lastBroadcast=now;
+    const packet=JSON.stringify(state);
     for(const ws of this.sessions.keys())try{ws.send(packet);}catch{const s=this.sessions.get(ws);if(s)releaseGrabs(this.players(),s.player.id);this.sessions.delete(ws);}
     if(!this.sessions.size&&this.timer){clearInterval(this.timer);this.timer=undefined;}
   }

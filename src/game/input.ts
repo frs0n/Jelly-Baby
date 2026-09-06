@@ -142,6 +142,10 @@ export class Input {
     }
     return false;
   }
+  pickSurface(ray:THREE.Ray) {
+    this.grabBVH.refit();
+    return this.grabBVH.hit([ray.origin.x,ray.origin.y,ray.origin.z],[ray.direction.x,ray.direction.y,ray.direction.z]);
+  }
   private begin=(e:PointerEvent)=>{
     if(!this.allowGrab||!this.enabled)return;
     if(e.button!==0||this.grabs.has(e.pointerId)||this.body.grabs.length>=MAX_GRABS)return;
@@ -151,9 +155,8 @@ export class Input {
     // Exact picking against the same full-resolution deformed surface that is
     // rendered, but through its refittable BVH instead of Three's O(144k)
     // triangle scan. This changes no grip position or binding semantics.
-    this.grabBVH.refit();
-    const ray=this.raycaster.ray,o=[ray.origin.x,ray.origin.y,ray.origin.z],d=[ray.direction.x,ray.direction.y,ray.direction.z];
-    const hit=this.grabBVH.hit(o,d);if(!hit)return;
+    const ray=this.raycaster.ray;
+    const hit=this.pickSurface(ray);if(!hit)return;
     const ix=this.body.surface.indices,offset=hit.t*3;
     const face={a:ix[offset],b:ix[offset+1],c:ix[offset+2]};
     const point=ray.at(hit.distance,new THREE.Vector3());

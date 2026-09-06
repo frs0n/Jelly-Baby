@@ -22,7 +22,9 @@
     "test:drag": "node --experimental-strip-types scripts/verify-drag-input.mjs",
     "test:reconcile": "node --experimental-strip-types scripts/verify-reconcile.mjs",
     "test:remote": "node --experimental-strip-types scripts/verify-remote-actor.mjs",
-    "test:impact": "node --experimental-strip-types scripts/verify-impact.mjs"
+    "test:impact": "node --experimental-strip-types scripts/verify-impact.mjs",
+    "test:protocol": "node --experimental-strip-types scripts/verify-protocol.mjs",
+    "test:network-budget": "node --experimental-strip-types scripts/verify-network-budget.mjs"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260906.1",

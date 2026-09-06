@@ -6,12 +6,13 @@ export interface ModelManifest {
   layout:Record<string,{offset:number;length:number;type:string}>;
 }
 
-export function parseBabyCage(buffer:ArrayBuffer,manifest:ModelManifest) {
+export function parseBabyCage(buffer:ArrayBuffer,manifest:ModelManifest,remote=false) {
   const f32=(name:string)=>new Float32Array(buffer,manifest.layout[name].offset,manifest.layout[name].length);
   const f64=(name:string)=>new Float64Array(buffer,manifest.layout[name].offset,manifest.layout[name].length);
   const u32=(name:string)=>new Uint32Array(buffer,manifest.layout[name].offset,manifest.layout[name].length);
-  const positions=f32('positions').slice(),normals=f32('normals'),indices=u32('indices');
-  const bindingIds=u32('bindingIds'),bindingWeights=f64('bindingWeights');
+  const positions=f32(remote?'opticalPositions':'positions').slice(),normals=f32(remote?'opticalNormals':'normals'),indices=u32(remote?'opticalIndices':'indices');
+  const bindingIds=u32(remote?'opticalBindingIds':'bindingIds'),bindingWeights=f64(remote?'opticalBindingWeights':'bindingWeights');
+  const contactIds=remote?u32('bindingIds'):bindingIds,contactWeights=remote?f64('bindingWeights'):bindingWeights;
   const stencils:[number,number][][]=[];
   for(let i=0;i<positions.length/3;i++) {
     stencils.push(Array.from({length:4},(_,k)=>[bindingIds[i*4+k],bindingWeights[i*4+k]] as [number,number]));
@@ -30,7 +31,7 @@ export function parseBabyCage(buffer:ArrayBuffer,manifest:ModelManifest) {
   opticalGeometry.setIndex(new BufferAttribute(u32('opticalIndices'),1));opticalGeometry.computeBoundingBox();
   return {
     pos:f64('particles'),tets,volumes:f64('volumes'),totalVolume:manifest.volume,
-    contactBindings:Array.from(u32('contacts'),id=>stencils[id]),
+    contactBindings:Array.from(u32('contacts'),id=>Array.from({length:4},(_,k)=>[contactIds[id*4+k],contactWeights[id*4+k]] as [number,number])),
     surface:{geometry,positions,indices,stencils,bindingIds,bindingWeights,restNormals:normals,tetIds:u32('tetIds')},
     opticalSurface:{geometry:opticalGeometry,positions:opticalPositions,indices:u32('opticalIndices'),restNormals:opticalNormals,
       bindingIds:u32('opticalBindingIds'),bindingWeights:f64('opticalBindingWeights')},

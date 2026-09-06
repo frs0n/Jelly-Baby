@@ -4,8 +4,10 @@ import { spawn } from '../src/multiplayer/simulation.ts';
 import { model,worker } from './remote-worker-harness.mjs';
 const actor=new RemoteActor(model),state=spawn('remote',[]);state.x=state.z=state.yaw=0;
 let frame=actor.advance(1/60,state,null);
-assert.equal(frame.physicsSteps,4);
-assert.equal(frame.lengths[0],actor.body.surface.positions.length,'full original skin resolution');
+assert.equal(frame.physicsSteps,2);
+assert.equal(frame.lengths[0],actor.body.surface.positions.length,'remote skin resolution');
+assert.equal(frame.lengths[0],model.manifest.layout.opticalPositions.length,'remote skin uses the existing optical surface');
+assert.ok(frame.lengths[0]<model.manifest.layout.positions.length/7,'at least 7x fewer body vertices');
 assert.ok(frame.lengths.length>5,'all original face meshes included');
 const original=new Float32Array(frame.buffer).slice();
 for(let i=0;i<90;i++)frame=actor.advance(1/60,state,{hand:1,target:{x:.20,y:.08,z:0}},frame.buffer);
@@ -31,5 +33,14 @@ try {
  await Promise.all(workers.map(w=>send(w,{type:'init',model})));
  const start=performance.now();let frames=await Promise.all(workers.map(w=>send(w,{type:'frame',dt:1/60,state:{...state,grab:null},reach:null})));
  for(let i=0;i<15;i++)frames=await Promise.all(workers.map((w,j)=>{const buffer=frames[j].buffer;const response=send(w,{type:'frame',dt:1/60,state:{...state,grab:null,vx:.1},reach:null,buffer},[buffer]);assert.equal(buffer.byteLength,0);return response;}));
- console.log(`PASS: full FEM/face meshes, hand reaches within 14 mm, release, victim deformation, five workers and transfer reuse (${((performance.now()-start)/16).toFixed(1)} ms per five-worker batch including initial frames)`);
+ // Five simultaneous victims stay bounded at the production 30 Hz cadence.
+ for(let i=0;i<30;i++)frames=await Promise.all(workers.map((w,j)=>{
+  const buffer=frames[j].buffer;
+  return send(w,{type:'frame',dt:1/30,state:{...state,grab:{...state.grab,target:{x:.04+Math.sin(i*.2+j)*.015,y:.12,z:.02}}},reach:null,buffer},[buffer]);
+ }));
+ assert.ok(frames.every(f=>f.physicsSteps===4&&f.gripPoint&&Number.isFinite(f.gripPoint.y)));
+ assert.ok(frames.reduce((sum,f)=>sum+f.buffer.byteLength,0)<2e6,'five deformed skins fit in 2 MB per update');
+ frames=await Promise.all(workers.map((w,j)=>send(w,{type:'frame',dt:1/30,state:{...state,grab:null},reach:null,buffer:frames[j].buffer},[frames[j].buffer])));
+ assert.ok(frames.every(f=>f.gripPoint===null),'all five victims release constraints');
+ console.log(`PASS: 120 Hz FEM, lightweight skin/face meshes, hand reaches within 14 mm, release, victim deformation, five concurrent drags/releases and transfer reuse (${(performance.now()-start).toFixed(0)} ms for worker scenarios)`);
 }finally{await Promise.all(workers.map(w=>w.terminate()));}

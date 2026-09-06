@@ -51,17 +51,18 @@ export class OnlineDrag {
     this.eventRay(e);
     const hit=this.visitors.pick(this.ray);if(!hit)return;
     // Let the existing exact surface picker handle a nearer self hit.
-    const own=this.ray.intersectObject(this.input.mesh,false)[0];if(own&&own.distance<hit.distance)return;
+    const own=this.input.pickSurface(this.ray.ray);if(own&&own.distance<hit.distance)return;
     const self=this.client.players.find(p=>p.id===this.client.id),other=this.client.players.find(p=>p.id===hit.id);
     if(!self||!other||other.grab||Math.hypot(self.x-other.x,self.y-other.y,self.z-other.z)>GRAB_REACH)return;
     e.preventDefault();e.stopImmediatePropagation();void this.input.sound.unlock().catch(()=>{});
     const normal=this.input.camera.getWorldDirection(new THREE.Vector3());
     this.drag={pointer:e.pointerId,id:hit.id,plane:new THREE.Plane().setFromNormalAndCoplanarPoint(normal,hit.point),target:hit.point.clone(),accepted:false};
     this.input.externalGrab=true;this.input.controls.enabled=false;this.canvas.classList.add('grabbing');this.canvas.setPointerCapture(e.pointerId);
+    this.visitors.beginPrediction(hit.id,hit.point);
     this.client.beginGrab(hit.id,hit.point);
   };
   private capture(e:PointerEvent) {
-    if(!this.drag)return;this.eventRay(e);projectGrabTarget(this.ray.ray,this.drag.plane,this.drag.target);
+    if(!this.drag)return;this.eventRay(e);projectGrabTarget(this.ray.ray,this.drag.plane,this.drag.target);this.visitors.predictGrab(this.drag.id,this.drag.target);
   }
   private move=(e:PointerEvent)=>{
     if(this.drag?.pointer!==e.pointerId)return;
@@ -74,7 +75,7 @@ export class OnlineDrag {
     e.preventDefault();e.stopImmediatePropagation();this.clear();
   };
   clear=()=>{
-    const drag=this.drag;this.drag=null;
+    const drag=this.drag;this.drag=null;this.visitors.clearPrediction();
     if(drag||this.selfGrip)this.client.endGrab();
     this.selfGrip=null;this.accepted=false;
     this.input.allowGrab=this.client.connected&&!this.incoming;

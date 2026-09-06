@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { StateDecoder } from '../src/multiplayer/protocol.ts';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath, URL } from 'node:url';
@@ -10,8 +11,8 @@ async function seat(fingerprint='a'.repeat(64),exclude='') {
 }
 async function connect(ticket) {
  const response=await mf.dispatchFetch(`https://example.com/api/room/${ticket.room}?ticket=${ticket.ticket}`,{headers:{Upgrade:'websocket'}});
- assert.equal(response.status,101);const ws=response.webSocket;const client={ws,id:'',states:[],grabs:[]};sockets.push(ws);
- ws.addEventListener('message',e=>{const p=JSON.parse(e.data);if(p.type==='welcome')client.id=p.id;else if(p.type==='grab-result')client.grabs.push(p);else if(p.type==='state')client.states.push(p);});ws.accept();
+ assert.equal(response.status,101);const ws=response.webSocket;const client={ws,id:'',states:[],grabs:[]};const decoder=new StateDecoder();sockets.push(ws);
+ ws.addEventListener('message',e=>{const p=JSON.parse(e.data);if(p.type==='welcome')client.id=p.id;else if(p.type==='grab-result')client.grabs.push(p);else if(p.type==='state')client.states.push(decoder.decode(p));});ws.accept();
  await until(()=>client.id&&client.states.length);return client;
 }
 async function until(check,timeout=3000){const start=Date.now();while(!check()){assert.ok(Date.now()-start<timeout,'timed out waiting for room state');await sleep(15);}}

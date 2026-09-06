@@ -1,13 +1,14 @@
 import * as THREE from 'three/webgpu';
 import { colorJelly } from './jelly-color.ts';
-import { loadBabyModel, type BabyModel } from '../physics/baby-cage.ts';
+import { loadBabyModel, parseBabyCage, type BabyModel } from '../physics/baby-cage.ts';
 import type { Player } from './simulation.ts';
 import type { ActorFrame } from './remote-actor.ts';
+import type { Grip } from './grabs.ts';
 import type { Reach } from './reaching-hand.ts';
 
 type Options={model?:Promise<BabyModel>;worker?:()=>Worker;fail?:(error:Error)=>void;localGrip?:()=>THREE.Vector3|null};
 type Visitor={group:THREE.Group;meshes:THREE.Mesh[];worker:Worker;ready:boolean;busy:boolean;elapsed:number;frame:ActorFrame|null;recycle?:ArrayBuffer;center:THREE.Vector3;state:Player;samples:{time:number;state:Player}[]};
-/** Full original FEM and face animation run locally, away from the rendering thread. */
+/** Local FEM and face animation with a lightweight remote skin and bounded updates. */
 export class Visitors {
   private template:THREE.Group;
   private visitors=new Map<string,Visitor>();
@@ -16,6 +17,14 @@ export class Visitors {
   private model:Promise<BabyModel>;
   private players:Player[]=[];
   private self='';
+  private predicted:{id:string;grip:Grip}|null=null;
+  beginPrediction(id:string,point:THREE.Vector3){
+    const p=this.players.find(p=>p.id===id),self=this.players.find(p=>p.id===this.self);if(!p||!self)return;
+    const hand=(p.x-self.x)*Math.cos(self.yaw)-(p.z-self.z)*Math.sin(self.yaw)>=0?1:-1;
+    this.predicted={id,grip:{by:this.self,hand,anchor:{x:point.x-p.x,y:point.y-p.y,z:point.z-p.z},target:{x:point.x,y:point.y,z:point.z},updated:0}};
+  }
+  predictGrab(id:string,target:THREE.Vector3){if(this.predicted?.id===id)this.predicted.grip.target={x:target.x,y:target.y,z:target.z};}
+  clearPrediction(){this.predicted=null;}
   constructor(scene:THREE.Scene,source:THREE.Group,_center:THREE.Vector3,options:Options={}) {
     this.scene=scene;this.options=options;this.model=options.model??loadBabyModel();this.template=source.clone(true);
     this.template.traverse(object=>{if(object instanceof THREE.Mesh)object.geometry=object.geometry.clone();});
@@ -30,7 +39,7 @@ export class Visitors {
       if(!v) {
         const group=this.template.clone(true),meshes:THREE.Mesh[]=[];
         group.visible=false;
-        group.traverse(object=>{if(object instanceof THREE.Mesh){object.geometry=object.geometry.clone();object.material=Array.isArray(object.material)?object.material.map(m=>m.clone()):object.material.clone();meshes.push(object);}});
+        group.traverse(object=>{if(object instanceof THREE.Mesh){object.frustumCulled=true;object.geometry=meshes.length===0?new THREE.BufferGeometry():object.geometry.clone();object.material=Array.isArray(object.material)?object.material.map(m=>m.clone()):object.material.clone();meshes.push(object);}});
         const worker=this.options.worker?this.options.worker():new Worker(new URL('./remote-actor.worker.ts',import.meta.url),{type:'module'});
         v={group,meshes,worker,ready:false,busy:false,elapsed:0,frame:null,center:new THREE.Vector3(),state:p,samples:[]};
         const visitor=v;this.visitors.set(p.id,v);this.scene.add(group);
@@ -43,13 +52,14 @@ export class Visitors {
           if(data.type==='error'){fail(data.message);return;}
           this.apply(visitor,data as ActorFrame);visitor.busy=false;
         };
-        void this.model.then(model=>{if(this.visitors.get(p.id)===visitor)worker.postMessage({type:'init',model});}).catch(error=>fail(String(error)));
+        void this.model.then(model=>{if(this.visitors.get(p.id)!==visitor)return;const cage=parseBabyCage(model.buffer,model.manifest,true);visitor.meshes[0].geometry.dispose();visitor.meshes[0].geometry=cage.surface.geometry;cage.opticalSurface.geometry.dispose();worker.postMessage({type:'init',model});}).catch(error=>fail(String(error)));
       }
       if(v.state.appearance.primary!==p.appearance.primary||v.state.appearance.secondary!==p.appearance.secondary||!v.group.userData.colored) {
         for(const object of v.meshes)if(object.material instanceof THREE.MeshPhysicalNodeMaterial&&object.material.transmission>0)colorJelly(object.material,p.appearance,v.center);
         v.group.userData.colored=true;
       }
-      v.state=p;v.samples.push({time,state:structuredClone(p)});if(v.samples.length>20)v.samples.shift();
+      // Decoded snapshots are immutable; keep references instead of cloning every player.
+      v.state=p;v.samples.push({time,state:p});if(v.samples.length>20)v.samples.shift();
     }
   }
   private apply(v:Visitor,frame:ActorFrame) {
@@ -60,8 +70,10 @@ export class Visitors {
         const attribute=geometry.getAttribute(name) as THREE.BufferAttribute;
         attribute.array=new Float32Array(frame.buffer,offset,length);attribute.needsUpdate=true;offset+=length*4;
       }
-      const b=frame.bounds[i];geometry.boundingBox=new THREE.Box3(new THREE.Vector3(...b.slice(0,3)),new THREE.Vector3(...b.slice(3,6)));
-      geometry.boundingSphere=new THREE.Sphere(new THREE.Vector3(...b.slice(6,9)),b[9]);
+      const b=frame.bounds[i];
+      geometry.boundingBox??=new THREE.Box3();geometry.boundingSphere??=new THREE.Sphere();
+      geometry.boundingBox.min.set(b[0],b[1],b[2]);geometry.boundingBox.max.set(b[3],b[4],b[5]);
+      geometry.boundingSphere.center.set(b[6],b[7],b[8]);geometry.boundingSphere.radius=b[9];
     });
     v.recycle=v.frame?.buffer;v.frame=frame;v.center.set(frame.center.x,frame.center.y,frame.center.z);v.group.visible=true;
   }
@@ -71,6 +83,7 @@ export class Visitors {
     return v&&p?new THREE.Vector3(p.x,p.y,p.z).add(v.group.position):null;
   }
   reachFor(id:string):Reach|null {
+    if(id===this.self&&this.predicted){const p=this.grabPoint(this.predicted.id);return {hand:this.predicted.grip.hand,target:p?{x:p.x,y:p.y,z:p.z}:this.predicted.grip.target};}
     const victim=this.players.find(p=>p.id!==id&&p.grab?.by===id);
     if(!victim?.grab)return null;
     const point=this.grabPoint(victim.id);
@@ -92,10 +105,21 @@ export class Visitors {
       const from=v.samples[0],to=v.samples[1];
       const t=to?Math.max(0,Math.min(1,(renderTime-from.time)/Math.max(1,to.time-from.time))):0;
       const state={...v.state};
-      if(to)for(const key of ['x','y','z','vx','vy','vz'] as const)state[key]=THREE.MathUtils.lerp(from.state[key],to.state[key],t);
+      if(to){
+        for(const key of ['x','y','z','vx','vy','vz'] as const)state[key]=THREE.MathUtils.lerp(from.state[key],to.state[key],t);
+        const angle=to.state.yaw-from.state.yaw;state.yaw=from.state.yaw+Math.atan2(Math.sin(angle),Math.cos(angle))*t;
+        if(state.grab&&from.state.grab?.by===state.grab.by&&to.state.grab?.by===state.grab.by){
+          const a=from.state.grab.target,b=to.state.grab.target;
+          state.grab={...state.grab,target:{x:THREE.MathUtils.lerp(a.x,b.x,t),y:THREE.MathUtils.lerp(a.y,b.y,t),z:THREE.MathUtils.lerp(a.z,b.z,t)}};
+        }
+      }
       if(v.frame)v.group.position.set(state.x-v.frame.root.x,state.y-v.frame.root.y,state.z-v.frame.root.z);
+      // Pointer feedback is local; ownership/release still come from authority.
+      if(this.predicted?.id===id&&(!state.grab||state.grab.by===this.self))state.grab={...(state.grab??this.predicted.grip),target:{...this.predicted.grip.target}};
       v.elapsed=Math.min(.05,v.elapsed+dt);
-      if(!v.ready||v.busy)continue;
+      // Deform/upload at 30 Hz independently of 60/120/144 Hz rendering.
+      // Keep 120 Hz remote solver substeps, with at most one in-flight job per actor.
+      if(!v.ready||v.busy||(v.frame&&v.elapsed+1e-9<1/30))continue;
       v.busy=true;const buffer=v.recycle;v.recycle=undefined;
       v.worker.postMessage({type:'frame',dt:v.elapsed,state,reach:this.reachFor(id),buffer},buffer?[buffer]:[]);v.elapsed=0;
     }
