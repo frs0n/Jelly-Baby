@@ -18,6 +18,9 @@ export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
   stage('Starting WebGPU');
   const renderer=await createRenderer(fail);
   document.querySelector('#viewport')!.appendChild(renderer.domElement);
+  // Construct audio before the remaining async scene work so the first mobile
+  // gesture can unlock Web Audio even while assets and shaders are settling.
+  const sound=new JellySound();
   const scene=new THREE.Scene();
   scene.background=new THREE.Color('#e8d9c3');scene.fog=new THREE.Fog('#e8d9c3',2,12);
   const camera=new THREE.PerspectiveCamera(36,1,.001,40);
@@ -30,7 +33,7 @@ export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
   const optics=new RefractiveLightField(body.cage.opticalSurface,environment.incoming,ABSORPTION);
   const table=await makeTable(optics,environment);scene.add(table.mesh);
   const composite=createComposite(renderer,scene,camera);
-  const sound=new JellySound(),rig=new Locomotion(body);
+  const rig=new Locomotion(body);
   rig.onContact=(speed,foot)=>sound.contact(speed,foot);
   const physicsClock=new FixedStepper(PHYS.step);
   let lastTime=0,disposed=false;
@@ -94,5 +97,5 @@ export async function startGame(stage:(s:string)=>void,fail:(e:unknown)=>void) {
   };
   window.addEventListener('pagehide',event=>{if(!event.persisted)dispose();});
   if(import.meta.hot)import.meta.hot.dispose(dispose);
-  return {stop:()=>{disposed=true;input.clear();transport.dispose();void renderer.setAnimationLoop(null);}};
+  return {stop:()=>{disposed=true;input.clear();sound.dispose();transport.dispose();void renderer.setAnimationLoop(null);}};
 }

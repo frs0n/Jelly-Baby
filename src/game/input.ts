@@ -10,6 +10,11 @@ export class Input {
   readonly controls:OrbitControls;
   private keys=new Set<string>();
   private touchKeys=new Map<number,string>();
+  private joystickPointer:number|null=null;
+  private joystickX=0;
+  private joystickZ=0;
+  private joystickElement:HTMLButtonElement|null=null;
+  private joystickKnob:HTMLElement|null=null;
   private activePointer:number|null=null;
   private releasePending=false;
   private releaseStepsRemaining=0;
@@ -50,15 +55,25 @@ export class Input {
     // transition loses that path and leaves activePointer wedged forever.
     window.addEventListener('pointerup',this.end,{capture:true,signal});
     window.addEventListener('pointercancel',this.end,{capture:true,signal});
+    window.addEventListener('pointerup',this.releaseJoystick,{capture:true,signal});
+    window.addEventListener('pointercancel',this.releaseJoystick,{capture:true,signal});
     canvas.addEventListener('lostpointercapture',this.end,{signal});
     window.addEventListener('keydown',this.keyDown,{signal});
     window.addEventListener('keyup',e=>this.keys.delete(e.code),{signal});
     window.addEventListener('blur',this.clear,{signal});
     document.addEventListener('visibilitychange',()=>{if(document.hidden) this.clear();},{signal});
-    document.addEventListener('pointerdown',()=>{void sound.unlock().catch(()=>{});},{signal});
+    this.joystickElement=document.querySelector<HTMLButtonElement>('[data-joystick]');
+    this.joystickKnob=this.joystickElement?.querySelector<HTMLElement>('.joystick-knob')??null;
+    if(this.joystickElement) {
+      this.joystickElement.addEventListener('pointerdown',this.joystickStart,{signal});
+      this.joystickElement.addEventListener('pointermove',this.joystickMove,{passive:false,signal});
+      this.joystickElement.addEventListener('pointerup',this.releaseJoystick,{signal});
+      this.joystickElement.addEventListener('pointercancel',this.releaseJoystick,{signal});
+      this.joystickElement.addEventListener('lostpointercapture',this.releaseJoystick,{signal});
+    }
     for(const button of document.querySelectorAll<HTMLButtonElement>('[data-control]')) {
       button.addEventListener('pointerdown',e=>{
-        e.preventDefault();button.setPointerCapture(e.pointerId);
+        e.preventDefault();void sound.unlock().catch(()=>{});button.setPointerCapture(e.pointerId);
         const code=button.dataset.control!;
         this.touchKeys.set(e.pointerId,code);button.classList.add('held');
         if(code==='Space')rig.jump();
@@ -71,6 +86,34 @@ export class Input {
       button.addEventListener('lostpointercapture',release,{signal});
     }
   }
+  private joystickStart=(e:PointerEvent)=>{
+    if(this.joystickPointer!==null||(e.pointerType==='mouse'&&e.button!==0))return;
+    e.preventDefault();e.stopPropagation();void this.sound.unlock().catch(()=>{});
+    this.joystickPointer=e.pointerId;this.joystickElement?.setPointerCapture(e.pointerId);
+    this.joystickElement?.classList.add('held');this.joystickMove(e);
+  };
+  private joystickMove=(e:PointerEvent)=>{
+    const joystick=this.joystickElement;
+    if(!joystick||this.joystickPointer!==e.pointerId)return;
+    e.preventDefault();e.stopPropagation();
+    const rect=joystick.getBoundingClientRect(),knob=this.joystickKnob?.getBoundingClientRect();
+    const radius=Math.max(1,Math.min(rect.width,rect.height)/2-(knob?.width??0)/2-5);
+    const dx=e.clientX-(rect.left+rect.width/2),dy=e.clientY-(rect.top+rect.height/2);
+    const distance=Math.hypot(dx,dy),scale=distance>radius?radius/distance:1;
+    const offsetX=dx*scale,offsetY=dy*scale;
+    this.joystickX=offsetX/radius;this.joystickZ=-offsetY/radius;
+    this.joystickKnob?.style.setProperty('--joystick-x',`${offsetX}px`);
+    this.joystickKnob?.style.setProperty('--joystick-y',`${offsetY}px`);
+  };
+  private releaseJoystick=(e:PointerEvent)=>{
+    if(this.joystickPointer!==e.pointerId)return;
+    e.preventDefault();
+    const joystick=this.joystickElement,id=this.joystickPointer;
+    this.joystickPointer=null;this.joystickX=0;this.joystickZ=0;
+    this.joystickKnob?.style.setProperty('--joystick-x','0px');
+    this.joystickKnob?.style.setProperty('--joystick-y','0px');joystick?.classList.remove('held');
+    if(id!==null&&joystick?.hasPointerCapture(id))joystick.releasePointerCapture(id);
+  };
   private eventRay(e:PointerEvent) {
     const rect=this.canvas.getBoundingClientRect();
     this.pointer.set((e.clientX-rect.left)/rect.width*2-1,-(e.clientY-rect.top)/rect.height*2+1);
@@ -158,6 +201,13 @@ export class Input {
   };
   clear=()=>{
     this.keys.clear();this.touchKeys.clear();
+    if(this.joystickPointer!==null) {
+      const id=this.joystickPointer,joystick=this.joystickElement;
+      this.joystickPointer=null;this.joystickX=0;this.joystickZ=0;
+      this.joystickKnob?.style.setProperty('--joystick-x','0px');
+      this.joystickKnob?.style.setProperty('--joystick-y','0px');joystick?.classList.remove('held');
+      if(joystick?.hasPointerCapture(id))joystick.releasePointerCapture(id);
+    }
     if(this.activePointer!==null&&this.canvas.hasPointerCapture(this.activePointer))this.canvas.releasePointerCapture(this.activePointer);
     this.finishRelease();this.rig.move.set(0,0,0);
     document.querySelectorAll('.held').forEach(el=>el.classList.remove('held'));
@@ -170,8 +220,10 @@ export class Input {
     return false;
   }
   step(h:number) {
-    const x=Number(this.pressed('KeyD','ArrowRight'))-Number(this.pressed('KeyA','ArrowLeft'));
-    const z=Number(this.pressed('KeyW','ArrowUp'))-Number(this.pressed('KeyS','ArrowDown'));
+    let x=Number(this.pressed('KeyD','ArrowRight'))-Number(this.pressed('KeyA','ArrowLeft'))+this.joystickX;
+    let z=Number(this.pressed('KeyW','ArrowUp'))-Number(this.pressed('KeyS','ArrowDown'))+this.joystickZ;
+    const inputLength=Math.hypot(x,z);
+    if(inputLength>1){x/=inputLength;z/=inputLength;}
     if(x||z) {
       this.camera.getWorldDirection(this.temp);this.temp.y=0;this.temp.normalize();
       this.rig.move.set(-this.temp.z*x+this.temp.x*z,0,this.temp.x*x+this.temp.z*z);

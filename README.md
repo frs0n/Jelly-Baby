@@ -12,7 +12,8 @@ npm run dev
 WASD / arrow keys move relative to the camera. Space hops. Drag the table to
 orbit, scroll or pinch to zoom, and drag the baby to stretch and throw. The camera
 holds still during a grab and follows smoothly after release. Touch controls
-appear on mobile. R resets. Sound starts with the first interaction.
+appear on mobile as a joystick and hop control. R resets. Sound starts with the
+first interaction.
 
 Physics is a foundation for plausible appearance and behavior, balanced against
 real-time CPU/GPU responsiveness. Preserve the established look and feel; use

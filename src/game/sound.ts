@@ -1,17 +1,53 @@
+type AudioWindow=Window&{webkitAudioContext?:typeof AudioContext};
+
 export class JellySound {
   private context:AudioContext|null=null;
   private master:GainNode|null=null;
   private compressor:DynamicsCompressorNode|null=null;
+  private resumePromise:Promise<void>|null=null;
+  private outputPrimed=false;
+  private abort=new AbortController();
   muted=false;
-  async unlock() {
-    if(!this.context) {
-      this.context=new AudioContext();
-      this.master=this.context.createGain(); this.master.gain.value=this.muted?0:.62;
-      this.compressor=this.context.createDynamicsCompressor();
-      this.compressor.threshold.value=-14; this.compressor.ratio.value=5;
-      this.master.connect(this.compressor).connect(this.context.destination);
+  constructor() {
+    const signal=this.abort.signal;
+    window.addEventListener('pointerdown',this.unlockFromGesture,{signal});
+    window.addEventListener('touchstart',this.unlockFromGesture,{passive:true,signal});
+    window.addEventListener('keydown',this.unlockFromGesture,{signal});
+  }
+  private unlockFromGesture=()=>{void this.unlock().catch(()=>{});};
+  private createContext() {
+    const Context=window.AudioContext??(window as AudioWindow).webkitAudioContext;
+    if(!Context)return null;
+    let context:AudioContext|null=null;
+    try {
+      context=new Context();
+      const master=context.createGain();master.gain.value=this.muted?0:.62;
+      const compressor=context.createDynamicsCompressor();
+      compressor.threshold.value=-14;compressor.ratio.value=5;
+      master.connect(compressor).connect(context.destination);
+      this.context=context;this.master=master;this.compressor=compressor;
+      return context;
+    } catch {
+      if(context&&context.state!=='closed')void context.close().catch(()=>{});
+      return null;
     }
-    if(this.context.state==='suspended') await this.context.resume();
+  }
+  private primeOutput(context:AudioContext) {
+    if(this.outputPrimed)return;
+    const source=context.createBufferSource();
+    source.buffer=context.createBuffer(1,1,context.sampleRate);source.connect(context.destination);source.start();
+    source.onended=()=>source.disconnect();this.outputPrimed=true;
+  }
+  unlock() {
+    const context=this.context??this.createContext();
+    if(!context||context.state==='closed')return Promise.resolve();
+    this.primeOutput(context);
+    if(context.state==='running')return Promise.resolve();
+    if(this.resumePromise)return this.resumePromise;
+    try {
+      this.resumePromise=context.resume().catch(()=>{}).finally(()=>{this.resumePromise=null;});
+    } catch {this.resumePromise=null;return Promise.resolve();}
+    return this.resumePromise;
   }
   toggle() {
     this.muted=!this.muted;
@@ -20,7 +56,7 @@ export class JellySound {
   }
   contact(speed:number,foot:boolean) {
     const ctx=this.context, out=this.master;
-    if(!ctx||!out||ctx.state!=='running'||this.muted) return;
+    if(!ctx||!out||ctx.state==='closed'||this.muted) return;
     const t=ctx.currentTime, strength=Math.min(1,speed/.8);
     // Damped wet membrane modes, plus a brief filtered surface-contact transient.
     const base=(foot?190:125)+Math.random()*18;
@@ -41,5 +77,9 @@ export class JellySound {
     gain.gain.value=.10*strength;noise.connect(filter).connect(gain).connect(out);noise.start(t);
     noise.onended=()=>{noise.disconnect();filter.disconnect();gain.disconnect();};
   }
-  dispose() { void this.context?.close(); }
+  dispose() {
+    this.abort.abort();this.master?.disconnect();this.compressor?.disconnect();
+    const context=this.context;this.context=null;this.master=null;this.compressor=null;this.resumePromise=null;
+    if(context&&context.state!=='closed')void context.close().catch(()=>{});
+  }
 }

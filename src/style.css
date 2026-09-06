@@ -27,11 +27,15 @@ kbd{font:9px/1 ui-sans-serif,sans-serif;display:inline-grid;place-items:center;w
 .specimen>span{display:inline-block;width:6px;height:6px;background:#82a347;border-radius:50%;margin-right:8px;box-shadow:0 0 0 4px #7c963815}
 .touch-controls{display:none;position:fixed;bottom:max(25px,env(safe-area-inset-bottom));left:24px;right:24px;align-items:end;justify-content:space-between;pointer-events:none}
 .touch-controls button{pointer-events:auto;border:1px solid #fff9;background:#f7f3e761;backdrop-filter:blur(14px);box-shadow:0 2px 12px #4e442908;user-select:none}
-.dpad{display:grid;grid-template-columns:48px 48px 48px;grid-template-rows:48px 48px;gap:5px}
-.dpad button{border-radius:15px;font-size:22px;font-weight:300}
-.dpad button:first-child{grid-column:2}.dpad button:nth-child(2){grid-column:1;grid-row:2}.dpad button:nth-child(3){grid-column:2;grid-row:2}.dpad button:nth-child(4){grid-column:3;grid-row:2}
+.joystick{--joystick-x:0px;--joystick-y:0px;position:relative;width:112px;height:112px;padding:0;border-radius:50%;background:#f7f3e74d!important;overflow:hidden}
+.joystick-track{position:absolute;inset:14px;border:1px solid #fff8;border-radius:50%;box-shadow:inset 0 1px 8px #4e44290d}
+.joystick-track::before,.joystick-track::after{content:"";position:absolute;background:#fff6}
+.joystick-track::before{width:1px;top:18%;bottom:18%;left:50%}.joystick-track::after{height:1px;left:18%;right:18%;top:50%}
+.joystick-knob{position:absolute;left:50%;top:50%;width:48px;height:48px;border:1px solid #fff9;border-radius:50%;background:#b8cf8dc7;box-shadow:0 3px 10px #4e442920;transform:translate(calc(-50% + var(--joystick-x)),calc(-50% + var(--joystick-y)));transition:transform .14s ease-out}
+.joystick.held .joystick-knob{transition:none}
 .jump{width:76px;height:76px;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px}.jump svg{width:27px;height:27px}.jump span{font-size:10px;letter-spacing:.04em}
 .touch-controls button.held{background:#b8cf8db3;transform:scale(.96)}
+.touch-controls .joystick.held{background:#f7f3e74d!important;transform:none}
 #loading{position:fixed;inset:0;z-index:10;display:grid;place-items:center;background:#eee7d9;transition:opacity .7s ease,visibility .7s;pointer-events:all}
 #loading.hidden{opacity:0;visibility:hidden;pointer-events:none}
 .loading-card{text-align:center;width:min(440px,85vw)}
@@ -43,5 +47,5 @@ h2{font:italic 39px Georgia,serif;letter-spacing:-1.6px;font-weight:400;margin:0
 .failed .jelly-mark{animation:none;background:#b7ac91}
 @keyframes breathe{0%,100%{transform:scale(1.05,.93)}50%{transform:scale(.96,1.04)}}
 @media(pointer:coarse),(max-width:700px){.touch-controls{display:flex}.desktop-hints,.specimen{display:none}.masthead{top:max(25px,env(safe-area-inset-top));left:24px}h1{font-size:35px;letter-spacing:-2px}.eyebrow{font-size:7px}.actions{top:max(24px,env(safe-area-inset-top));right:20px;gap:6px}.icon-button{width:38px;height:38px}}
-@media(max-height:480px) and (pointer:coarse){.masthead{top:16px}h1{font-size:29px;margin-top:7px}.eyebrow{display:none}.touch-controls{bottom:15px}.dpad{grid-template-columns:42px 42px 42px;grid-template-rows:42px 42px}.jump{width:65px;height:65px}}
+@media(max-height:480px) and (pointer:coarse){.masthead{top:16px}h1{font-size:29px;margin-top:7px}.eyebrow{display:none}.touch-controls{bottom:15px}.joystick{width:92px;height:92px}.joystick-track{inset:11px}.joystick-knob{width:40px;height:40px}.jump{width:65px;height:65px}}
 @media(prefers-reduced-motion:reduce){.jelly-mark{animation:none}#loading,.icon-button{transition:none}}

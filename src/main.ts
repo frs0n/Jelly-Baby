@@ -18,7 +18,10 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML=`
   </footer>
   <div class="specimen"><span></span> lime &nbsp; / &nbsp; 7 cm of happiness</div>
   <div class="touch-controls" aria-label="Touch controls">
-    <div class="dpad"><button data-control="KeyW" aria-label="Walk forward">↑</button><button data-control="KeyA" aria-label="Walk left">←</button><button data-control="KeyS" aria-label="Walk backward">↓</button><button data-control="KeyD" aria-label="Walk right">→</button></div>
+    <button class="joystick" data-joystick type="button" aria-label="Move">
+      <span class="joystick-track" aria-hidden="true"></span>
+      <span class="joystick-knob" aria-hidden="true"></span>
+    </button>
     <button class="jump" data-control="Space" aria-label="Jump"><svg viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 21V6m-6 6 6-6 6 6M6 24h16"/></svg><span>hop</span></button>
   </div>
   <section id="loading" role="status" aria-live="polite"><div class="loading-card"><div class="jelly-mark"></div><h2>A little life.</h2><p id="load-message">Warming up the world</p><pre id="fatal" hidden></pre><button id="retry" hidden>Try again</button></div></section>
